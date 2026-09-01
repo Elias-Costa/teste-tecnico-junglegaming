@@ -1,0 +1,342 @@
+# Requisitos — Distributed Wagering Processor
+
+Extração numerada e verificável do enunciado em `docs/desafio-original.md`. Este documento existe para que cada linha de código possa ser rastreada até um requisito, e para que "pronto" tenha um critério objetivo em vez de "parece funcionando".
+
+## 1. Como usar este documento
+
+- **`docs/desafio-original.md` é a fonte da verdade final.** Este arquivo é uma leitura organizada dele. Em caso de divergência, o enunciado vence e a divergência deve ser reportada, não resolvida por conta própria.
+- Itens marcados com **`[INTERPRETAÇÃO]`** não estão literais no enunciado — são leituras que precisam de confirmação do mantenedor antes de virar código. Cada um deve ter (ou gerar) uma entrada em `docs/decisions.md`.
+- Itens marcados com **`[DECISÃO: D-XXX]`** dependem de uma decisão em aberto. Não implementar antes de a decisão estar registrada.
+
+**Prefixos:**
+
+| Prefixo | Significado |
+|---|---|
+| `RF-XX` | Requisito funcional — algo que o sistema faz |
+| `RN-XX` | Regra de negócio — como uma operação se comporta |
+| `RNF-XX` | Requisito não funcional — concorrência, observabilidade, operação |
+| `RI-XX` | Restrição inviolável — proibição explícita do enunciado |
+| `EL-XX` | Falha eliminatória — invalida a entrega inteira |
+| `RT-XX` | Teste obrigatório |
+
+---
+
+## 2. Requisitos Funcionais
+
+### 2.1 Domínio (§6 do enunciado)
+
+**RF-01 — Value object `Money`**
+Representa dinheiro de forma exata e imutável. Toda operação retorna nova instância.
+*Aceite:*
+- `amount` recebido e serializado como **string decimal com escala fixa de 2** (`"25.00"`); `currency` em ISO-4217.
+- Factories `from(props)` e `zero(currency)`; construtor privado.
+- Operações: `add`, `subtract`, `negate`. Consultas: `isZero`, `isPositive`, `isNegative`, `isLessThan`, `equals`. Serialização: `toJSON`, `toString`.
+- Operação entre moedas diferentes lança erro de domínio (`assertSameCurrency`).
+- Entradas rejeitadas: `NaN`, `Infinity`, notação científica, string vazia, mais de 2 casas decimais, valores negativos em contratos de entrada.
+- **Escala de entrada é exatamente 2 casas** — `[DECIDIDO: D-015]`, lacuna do enunciado resolvida. `"25"` e `"25.5"` são rejeitados, assim como zeros à esquerda (`"025.00"`). Garante representação textual única por valor, o que impede conflito falso de `payloadHash` (RF-14).
+- **Não depende de tipos monetários do ORM nem de decorators do NestJS.**
+- Na persistência, valor e moeda podem ocupar colunas separadas, desde que a representação seja exata e reidratada como `Money`.
+
+**RF-02 — Aggregate root `Wallet`**
+*Aceite:*
+- Construtor privado; factories `open(props)` e `rehydrate(state)`.
+- Estado encapsulado: `_balance`, `_version`, `_updatedAt` expostos só por getter.
+- Métodos `debit` / `credit` aplicam a movimentação mantendo saldo e ledger consistentes entre si.
+- Invariantes: no máximo **uma wallet por `playerId` + `currency`**; saldo nunca negativo; moeda da operação igual à da wallet; toda alteração de saldo tem lançamento correspondente no ledger e vice-versa.
+- `version` inicia em `1` após a criação e **incrementa somente quando o saldo muda**.
+
+**RF-03 — Entidade `WagerTransaction`**
+*Aceite:*
+- Kinds: `OPENING`, `BET`, `WIN`, `LOSS`, `REFUND`, `ROLLBACK`.
+- Status: `PENDING`, `PENDING_REFERENCE`, `PROCESSED`, `REJECTED`, `FAILED`.
+- `PROCESSED`, `REJECTED` e `FAILED` são **terminais**. Transicionar a partir de um terminal lança `InvalidTransactionStateError` (erro de programação, não caminho de negócio).
+- `create` nasce em `PENDING` e valida a exigência de referência por kind; `rehydrate` não revalida transições.
+- Transições: `markProcessed`, `markPendingReference`, `reject(code)`, `fail(code)`.
+- Consultas de domínio: `isTerminal`, `affectsBalance` (**false para `LOSS`**), `requiresReference` (**true para `REFUND` e `ROLLBACK`**), `matchesPayload(payloadHash)`, `ledgerDirectionFor(reference?)`.
+- **Grafo de transições fechado** — `[DECIDIDO: D-013]`. `PENDING → {PROCESSED, REJECTED, FAILED, PENDING_REFERENCE}`; `PENDING_REFERENCE → {PROCESSED, REJECTED, FAILED}`. Sem self-loop e sem volta para `PENDING`: o contador de tentativas vive em colunas próprias, não no status.
+- **`FAILED` só em erro permanente de infraestrutura ou esgotamento para DLQ** — `[DECIDIDO: D-013]`. Erro transitório não altera o status.
+
+**RF-04 — Entidade imutável `WalletLedgerEntry`**
+*Aceite:*
+- Campos apenas `readonly`; **sem métodos de transição**. A imutabilidade é estrutural, não convenção.
+- `create` valida a aritmética: `balanceBefore ± money === balanceAfter` (`isBalanced()`).
+- Direções: `DEBIT` / `CREDIT`.
+- Uma transação financeira produz **no máximo um lançamento por wallet**.
+- Operações sem efeito no saldo (`LOSS` e qualquer transação `REJECTED`) **não geram lançamento**.
+
+**RF-05 — `InboxMessage`**
+Deduplicação persistente de mensagens consumidas, por `(consumerName, messageId)`.
+*Aceite:* factories `receive` / `rehydrate`; `payloadHash`; `isProcessed()` e `markProcessed(at)`.
+
+**RF-06 — `OutboxMessage`**
+Fila persistente de eventos de integração pendentes de publicação.
+*Aceite:* factories `enqueue(event)` / `rehydrate`; `attempts`, `nextAttemptAt`, `publishedAt`; `isPending()`, `isDue(now)`, `markPublished(at)`, `scheduleRetry(now)` incrementando tentativas e calculando o próximo `nextAttemptAt` com backoff.
+
+**RF-07 — Envelope `IntegrationEvent`**
+*Aceite:*
+- **Classe abstrata** com uma **subclasse concreta por evento**. `eventType` e `version` ficam **no tipo**, nunca como string no call site.
+- Campos: `eventId`, `aggregateId`, `correlationId`, `causationId?`, `occurredAt`, `data`.
+- `toJSON()` produz o envelope gravado no `payload` da outbox, com `occurredAt` em ISO-8601.
+- `data` carrega `MoneyProps` (string decimal), **nunca a instância de `Money`** — o payload precisa ser JSON estável e versionável.
+
+### 2.2 API HTTP (§9 do enunciado)
+
+**RF-08 — `POST /wallets`**
+Cria wallet para `playerId` + `initialBalance`.
+*Aceite:*
+- Saldo inicial maior que zero gera transação interna `OPENING` **na mesma transação SQL**, com lançamento `CREDIT` correspondente.
+- Resposta: `{ id, playerId, balance, version }` com `version: 1`.
+- Wallet duplicada para o mesmo `playerId` + `currency` falha como **conflito**.
+
+**RF-09 — `GET /wallets/:walletId`** — retorna estado atual da wallet.
+
+**RF-10 — `GET /wallets/:walletId/ledger?cursor=...&limit=50`**
+*Aceite:* paginação por **cursor estável e opaco** (não offset, não id exposto em claro). O critério de ordenação deve ser total e determinístico. `[DECIDIDO: D-014]` — keyset de coluna única sobre o id em UUIDv7, cursor = base64url do id. UUIDv7 passa a ser o padrão de id em todas as tabelas.
+
+**RF-11 — `GET /wagering/transactions/:transactionId`** — consulta por id interno.
+
+**RF-12 — `GET /providers/:providerId/wagering/transactions/:externalTransactionId`** — consulta por identidade do provedor.
+
+**RF-13 — `POST /wagering/transactions`**
+Submete uma operação de aposta.
+*Aceite:*
+- Header `Idempotency-Key` **obrigatório**; ausência é erro de payload inválido.
+- Body: `providerId`, `externalTransactionId`, `playerId`, `walletId`, `roundId`, `gameId`, `kind`, `money`.
+- Resposta: `{ transactionId, status, balance, idempotentReplay }`.
+- `kind: "OPENING"` submetido pela API é **rejeitado** (RN-13).
+
+**RF-14 — Idempotência da submissão**
+*Aceite:*
+- O header `Idempotency-Key` é **a fonte da verdade**. Default recomendado: `"{providerId}:{externalTransactionId}"`.
+- `payloadHash` = hash de um **JSON canônico (chaves ordenadas)** do subconjunto de **campos de negócio**. Header e metadados de transporte **não entram no hash**. `[DECIDIDO: D-005]` — SHA-256 sobre lista fechada de 10 campos; `undefined` omitido, `null` rejeitado. A lista é contrato: alterá-la invalida hashes gravados.
+- Requisição idêntica → mesma resposta, `idempotentReplay: true`.
+- Mesma key com payload diferente → **conflito**, não replay (RN-14).
+- A garantia é **persistente**, imposta por constraint no banco (EL-04, RI-09).
+
+**RF-15 — Mapeamento de status HTTP**
+*Aceite:* a API distingue com clareza — e **de forma consistente entre todos os endpoints** — cinco situações: (a) payload inválido, (b) conflito de idempotência, (c) rejeição por regra de negócio, (d) aceite com processamento pendente, (e) falha transitória de infraestrutura. Colapsar duas delas no mesmo código é falha de requisito. `[DECIDIDO: D-006]` — `400` / `409` / `422` / `202` / `503`, aplicados por um filtro de exceção único.
+
+**RF-16 — `POST /wallets/:walletId/reconciliation`**
+*Aceite:*
+- Resposta: `walletId`, `storedBalance`, `calculatedBalance`, `difference`, `consistent`, `checkedEntries`.
+- `calculatedBalance` é reconstruído a partir do ledger, não lido do saldo materializado.
+- Divergências **não são corrigidas silenciosamente**: são logadas, contabilizadas em métrica e sinalizadas na resposta.
+
+**RF-17 — Health checks**
+*Aceite:* `GET /health/live` (processo vivo) e `GET /health/ready` (PostgreSQL **e** SQS alcançáveis), separados e **sem autenticação**.
+
+### 2.3 Mensageria e workers (§10 e §11 do enunciado)
+
+**RF-18 — Consumidor SQS reutiliza o mesmo use case da entrada HTTP.** Não pode existir um caminho de processamento paralelo com regras próprias.
+
+**RF-19 — Deduplicação por inbox persistente** em `(consumerName, messageId)`, imposta por constraint única no banco.
+
+**RF-20 — `ack` somente após o commit** da transação financeira.
+
+**RF-21 — Classificação de erro no consumo**
+*Aceite:* erros de **negócio** (terminal → ack), **transitórios** (retry com backoff) e **permanentes** (DLQ) são distinguidos e tratados diferente. `[DECIDIDO: D-008]` — `maxReceiveCount` 5, alinhado à redrive policy; backoff exponencial com jitter; valores sobrescrevíveis por ambiente.
+
+**RF-22 — Shutdown gracioso**: em `SIGTERM`, concluir mensagens em andamento ou devolver a visibilidade. Nenhuma mensagem pode ficar "presa" nem ser perdida.
+
+**RF-23 — Transactional Outbox atômico**
+*Aceite:* persistência da transação, alteração de saldo, lançamento no ledger, registro de inbox (quando a entrada for SQS) e evento de integração participam da **mesma transação SQL** — ou tudo é confirmado junto, ou nada é.
+
+**RF-24 — Worker de publicação da outbox**
+*Aceite:*
+- Funciona com **múltiplos publishers concorrentes**, sem perder nem duplicar indefinidamente. `[DECIDIDO: D-009]` — claim com lease (`locked_by`/`locked_until`) e commit imediato; o publish acontece fora da transação, nunca segurando conexão durante I/O de rede.
+- Cenário obrigatório: (1) Postgres confirma o commit; (2) o processo morre antes de publicar; (3) outra instância assume; (4) o evento é publicado; (5) publicação duplicada continua segura para o consumidor.
+
+**RF-25 — Eventos mínimos**
+
+| Evento | Quando |
+|---|---|
+| `WagerTransactionProcessed` | qualquer transação aplicada, **inclusive `LOSS`** |
+| `WagerTransactionRejected` | transação rejeitada por regra de negócio |
+| `WalletBalanceChanged` | **somente** quando o saldo muda |
+| `WagerTransactionPendingReference` | referência ausente |
+
+**RF-26 — Worker de referências fora de ordem**
+*Aceite:*
+- Transações `PENDING_REFERENCE` são reprocessadas por um **worker agendado** com backoff exponencial.
+- Limite de tentativas ou TTL definido e justificado. `[DECIDIDO: D-008]` — **TTL de 15 min**, expresso em tempo e não em contagem de tentativas: a pergunta de negócio é quanto tempo se espera a referência chegar.
+- Esgotado o limite: `REJECTED` com `failureCode` que identifique a referência inexistente, e **evento correspondente publicado**.
+
+---
+
+## 3. Regras de Negócio (§7 do enunciado)
+
+| ID | Operação | Efeito no saldo | Ledger | Regra |
+|---|---|---|---|---|
+| **RN-01** | `BET` | débito | 1 entrada `DEBIT` | rejeitar se saldo insuficiente |
+| **RN-02** | `WIN` | crédito | 1 entrada `CREDIT` | pode referenciar a `BET` da mesma rodada |
+| **RN-03** | `LOSS` | nenhum | nenhuma | registra o resultado sem mover saldo |
+| **RN-04** | `REFUND` | crédito | 1 entrada `CREDIT` | reverte uma `BET` `PROCESSED`, **uma única vez** |
+| **RN-05** | `ROLLBACK` | inverso da referência | 1 entrada invertida | reverte uma transação `PROCESSED`, **uma única vez** |
+
+**RN-06** — `REFUND` e `ROLLBACK` exigem `referenceExternalTransactionId`. Ausência é rejeição, não aceite.
+
+**RN-07** — A referência é resolvida por `(providerId, referenceExternalTransactionId)` e deve pertencer ao **mesmo provider, player, wallet, moeda e rodada**. Qualquer divergência é rejeição.
+
+**RN-08** — `REFUND` só referencia `BET`. `ROLLBACK` referencia `BET`, `WIN` ou `REFUND`.
+
+**RN-09** — Uma referência **não pode ser revertida duas vezes pelo mesmo tipo de operação**. A garantia é de banco, não de aplicação (RI-09).
+
+**RN-10** — O valor de `REFUND`/`ROLLBACK` deve ser **igual** ao valor da referência. Reversão parcial está fora de escopo.
+
+**RN-11** — Transação `REJECTED` não altera saldo nem gera ledger.
+
+**RN-12** — Repetir uma operação já processada retorna **o resultado original**, incluindo o **saldo observado naquele momento** — não o saldo atual.
+
+**RN-13** — `OPENING` é **interno**: não pode ser submetido pela API nem pela fila.
+
+**RN-14** — A mesma idempotency key com payload diferente é **conflito**, não replay.
+
+**RN-15** — Referência ausente → persistir como `PENDING_REFERENCE` e reprocessar depois (RF-26). Não é rejeição imediata.
+
+**RN-16** — Reversão que produziria saldo negativo é **rejeitada explicitamente**, com um `failureCode` **distinto** do de uma aposta sem saldo — são situações operacionalmente diferentes — e permanece auditável.
+
+**RN-17 — Taxonomia de `failureCode`**
+Toda rejeição carrega um `failureCode` estável e legível por máquina, suficiente para o provedor decidir se **reenvia**, **corrige o payload** ou **desiste**. `[DECIDIDO: D-007]` — enum fechado de 11 códigos de negócio, com a ação esperada documentada por código em `ARCHITECTURE.md` (documentada, não transmitida). Os códigos de infraestrutura para o status `FAILED` seguem pendentes em D-007.
+
+---
+
+## 4. Requisitos Não Funcionais
+
+**RNF-01 — Unidade de concorrência é a `walletId`** (§8). Wallets diferentes processam em paralelo sem contenção mútua. Lock global compartilhado por todas as wallets é proibido (RI-06).
+
+**RNF-02 — Correção sob concorrência.** O sistema mantém a correção quando: duas apostas disputam o mesmo saldo; múltiplos workers recebem operações da mesma wallet; wallets diferentes são processadas em paralelo; **três ou mais instâncias** rodam simultaneamente.
+
+**RNF-03 — Cenário obrigatório de concorrência** (§8): saldo inicial `100.00 BRL`, duas apostas de `80.00 BRL` simultâneas. Resultado exigido: exatamente uma `PROCESSED`; a outra `REJECTED` por saldo insuficiente; saldo final `20.00 BRL`; **exatamente um** lançamento de débito no ledger; nenhum retry duplica o débito.
+
+**RNF-04 — Estratégia de concorrência justificada** em `ARCHITECTURE.md`. `[DECIDIDO: D-002]` — pessimistic locking por wallet (`LockMode.PESSIMISTIC_WRITE` dentro de `transactional`). `version` é mantido por exigência de RF-02, mas não é o mecanismo de controle.
+
+**RNF-05 — Ordenação e dedup do broker são otimização, não garantia.** O banco continua responsável pelas invariantes (RI-03).
+
+**RNF-06 — Logs estruturados** (§12): JSON, com `correlationId`, `messageId`, `transactionId`, `walletId`, `providerId`. **Sem dados sensíveis ou payloads financeiros completos nos logs.**
+
+**RNF-07 — Métricas** cobrindo no mínimo: transações por status, duplicatas detectadas, retries, mensagens em DLQ, conflitos de lock, **outbox lag** e latência de processamento. `[DECIDIDO: D-010]` — `prom-client` em `GET /metrics`, com a nomenclatura fechada na tabela de D-010.
+
+**RNF-08 — Entregáveis de documentação** (§14): `README.md` com setup e comandos executáveis do zero; `ARCHITECTURE.md` com decisões, trade-offs e **limitações conhecidas**.
+
+**RNF-09 — Migrations versionadas e reversíveis.** Todo `up` tem `down` que funciona.
+
+---
+
+## 5. Restrições Invioláveis e Falhas Eliminatórias
+
+### 5.1 Restrições invioláveis (§5 do enunciado)
+
+| ID | Restrição |
+|---|---|
+| **RI-01** | Não usar `number`, `float` ou `double` para dinheiro |
+| **RI-02** | Não usar cache em memória como garantia de idempotência |
+| **RI-03** | Não confiar apenas em SQS FIFO para garantir consistência |
+| **RI-04** | Não publicar eventos antes do commit da transação financeira |
+| **RI-05** | Não sobrescrever nem excluir lançamentos do ledger |
+| **RI-06** | Não usar lock global compartilhado por todas as wallets |
+| **RI-07** | Não implementar saldo como `read → calculate → update` sem controle de concorrência |
+| **RI-08** | A solução deve estar correta com **múltiplas instâncias** da aplicação |
+| **RI-09** | Unicidade, imutabilidade e não-negatividade aplicadas **no schema do banco**, não apenas em código de aplicação. O desenho de schema, constraints e índices é parte da avaliação |
+
+### 5.2 Falhas eliminatórias (§14 do enunciado)
+
+Cada uma invalida a entrega inteira. **Cada uma precisa de um mecanismo que a torne difícil de introduzir e de um teste que prove sua ausência.**
+
+| ID | Falha | Mecanismo de prevenção | Prova |
+|---|---|---|---|
+| **EL-01** | `number` para dinheiro | Regra de ESLint (`no-restricted-syntax`) banindo `parseFloat`, `Number(`, `.toFixed(` e aritmética nativa em `src/domain/`; coluna `numeric(19,2)` no schema | RT-01, `bun run lint` |
+| **EL-02** | Saldo negativo causado por race | `CHECK (balance >= 0)` no schema + estratégia de lock (D-002) | RT-13, RT-14 |
+| **EL-03** | Débito ou crédito duplicado | Constraint única de idempotência + inbox persistente | RT-12, RT-15 |
+| **EL-04** | Idempotência apenas em memória | Nenhuma estrutura em processo participa da decisão de replay | RT-08, RT-12 |
+| **EL-05** | Solução correta somente com uma instância | Nenhum estado compartilhado em processo; locks no banco | RT-15, RT-16 |
+| **EL-06** | Publicação de evento antes do commit | Outbox é a **única** via de publicação; nenhum publish direto no use case | RT-11, RT-17 |
+| **EL-07** | Ausência de ledger auditável | Ledger imutável (sem `UPDATE`/`DELETE` concedidos) + reconciliação | RT-06, RT-19 |
+| **EL-08** | Testes que substituem completamente PostgreSQL e SQS por mocks | Suíte de integração roda contra containers reais | RT-09..RT-19 |
+
+---
+
+## 6. Testes Obrigatórios (§13 do enunciado)
+
+### 6.1 Unidade
+
+| ID | Cobertura |
+|---|---|
+| **RT-01** | `Money`: escala, arredondamento, entradas inválidas (`NaN`, `Infinity`, notação científica, string vazia, >2 casas, negativos) |
+| **RT-02** | Invariantes da `Wallet`: saldo não negativo, moeda, `version` incrementa só quando o saldo muda |
+| **RT-03** | Regras de `BET`, `WIN`, `LOSS`, `REFUND`, `ROLLBACK` (RN-01..RN-05) |
+| **RT-04** | Conflito de moeda entre operação e wallet |
+| **RT-05** | Idempotency key com payload divergente → conflito, não replay (RN-14) |
+| **RT-06** | `WalletLedgerEntry.isBalanced()` e recusa de lançamento aritmeticamente inválido |
+| **RT-07** | Transições de `WagerTransaction`: terminal não transiciona (RF-03) |
+
+### 6.2 Integração (PostgreSQL e LocalStack/MiniStack **reais em containers**)
+
+| ID | Cobertura |
+|---|---|
+| **RT-08** | Migrations e constraints: `up`/`down`, unicidade, `CHECK` de não-negatividade, imutabilidade do ledger |
+| **RT-09** | Atomicidade entre wallet, ledger, inbox e outbox — falha em qualquer ponto não deixa estado parcial |
+| **RT-10** | Inbox e redelivery: mesma `messageId` entregue duas vezes não duplica efeito |
+| **RT-11** | Publishers concorrentes sobre a mesma outbox |
+| **RT-12** | Retry e DLQ: limite de tentativas respeitado, mensagem chega à DLQ |
+| **RT-13** | Recuperação após reinicialização |
+
+### 6.3 Concorrência (paralelismo real, **não mocks sequenciais**)
+
+| ID | Cenário |
+|---|---|
+| **RT-14** | A mesma aposta enviada **50 vezes em paralelo** → um único débito |
+| **RT-15** | Cenário obrigatório da §8: `100.00`, duas apostas de `80.00` (RNF-03) |
+| **RT-16** | Wallets distintas processadas em paralelo |
+| **RT-17** | **≥ 3 processos/instâncias** simultâneos |
+| **RT-18** | Worker morto **depois do commit e antes do ack** |
+| **RT-19** | Dois publishers sobre a mesma outbox |
+| **RT-20** | `ROLLBACK` ou `REFUND` entregue **antes** da referência |
+| **RT-21** | Reinício do serviço com comprovação da consistência final |
+
+### 6.4 Invariante final de todos os testes
+
+```
+wallet.balance == saldo reconstruído pelo ledger
+```
+
+Nenhum teste é considerado verde sem que essa igualdade valha ao final.
+
+---
+
+## 7. Fora de Escopo
+
+Lista canônica. **Não implementar**, mesmo que pareça trivial de adicionar.
+
+| Item | Origem |
+|---|---|
+| Reversão parcial de `REFUND`/`ROLLBACK` | §7.5 — "reversão parcial está fora de escopo" |
+| Tabela própria de usuários com hash de senha / autenticação artesanal | §2 — se houver auth, é via IdP externo |
+| Autenticação em geral | §2 — vale **0 ponto**. **D-012: não implementar**, entregando o desenho documentado + `ProviderIdentityPort` e `AuthGuard` no-op |
+| Prisma ou qualquer ORM fora de MikroORM/TypeORM | §4 |
+| Conversão entre moedas | §6.1 — o modelo continua multi-moeda, mas o desafio assume `BRL` |
+| Playwright/UI, frontend | não mencionado no enunciado |
+
+**Diferenciais opcionais** (só depois do núcleo completo e verde):
+
+- Teste de carga exposto como `bun run test:load`, com ambiente, metodologia, throughput, p50/p95/p99, taxa de erro, conflitos de concorrência e outbox lag registrados.
+- Ledger de partidas dobradas (*double-entry bookkeeping*).
+- OpenTelemetry e dashboard.
+
+---
+
+## 8. Mapa de Pontuação
+
+Ordem de prioridade quando o tempo apertar: **eliminatórias primeiro, depois densidade de pontos.**
+
+| Área | Pts | Requisitos que a sustentam |
+|---|---|---|
+| Correção financeira | 20 | RF-01, RF-02, RF-04, RF-08, RF-16, RN-01..RN-17, RT-01..RT-06 |
+| Concorrência | 20 | RNF-01..RNF-05, EL-02, EL-05, RT-14..RT-17 |
+| Idempotência | 15 | RF-14, RF-19, RN-12, RN-14, EL-03, EL-04, RT-05, RT-10 |
+| Mensageria e falhas | 15 | RF-18..RF-26, EL-06, RT-09..RT-13, RT-18..RT-21 |
+| Modelagem e arquitetura | 10 | RF-01..RF-07, RI-09 |
+| Testes | 10 | RT-01..RT-21, EL-08 |
+| Observabilidade | 5 | RF-17, RNF-06, RNF-07 |
+| Documentação | 5 | RNF-08 |
+
+**70 dos 100 pontos estão nas quatro primeiras linhas.** Autenticação vale 0. Qualquer hora gasta fora do núcleo antes de o núcleo estar verde é hora mal alocada.
