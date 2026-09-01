@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "Preserve",
+    "moduleResolution": "bundler",
+    "types": ["node", "bun"],
+
+    // O Bun transpila em runtime; o `tsc` aqui é apenas o typechecker
+    // de `bun run typecheck`. Daí `noEmit`.
+    "noEmit": true,
+    // O Bun resolve imports com extensão `.ts` diretamente; sem isto o `tsc`
+    // reclama de um caminho que o runtime aceita.
+    "allowImportingTsExtensions": true,
+
+    // Exigidos pelos decorators do NestJS e do MikroORM.
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+
+    // §4 do enunciado: TypeScript em modo estrito.
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": false
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
