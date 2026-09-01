@@ -1,0 +1,58 @@
+# Infraestrutura do loop de desenvolvimento (D-011).
+# A suíte de `bun run check:full` NÃO usa este arquivo — ela se autoprovisiona
+# via Testcontainers. Os dois caminhos populam as mesmas variáveis de ambiente,
+# lidas por um módulo único de configuração de conexão.
+#
+# Tags fixadas exatas, mesma disciplina de D-001: versão flutuante em
+# infraestrutura de teste é fonte de falha intermitente difícil de diagnosticar.
+
+services:
+  postgres:
+    image: postgres:17.11-alpine
+    container_name: wagering-postgres
+    environment:
+      POSTGRES_USER: wagering
+      POSTGRES_PASSWORD: wagering
+      POSTGRES_DB: wagering
+    ports:
+      # Porta do host parametrizada, com 55432 como padrão em vez da 5432: a
+      # porta padrão do PostgreSQL costuma já estar ocupada na máquina de quem
+      # roda, e o projeto precisa subir sem exigir que ela esteja livre.
+      # `PGPORT` é a mesma variável que a aplicação lê, então container e
+      # cliente se movem juntos. Diagnóstico completo em D-011.
+      - "${PGPORT:-55432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # `bun run check:full` e as migrations dependem do banco estar aceitando
+      # conexões, não apenas do container estar de pé.
+      test: ["CMD-SHELL", "pg_isready -U wagering -d wagering"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  localstack:
+    # 4.14.0 é o ÚLTIMO release community que sobe sem token de licença.
+    # A linha atual (CalVer 2026.x) encerra com exit 55 e
+    # "License activation failed" mesmo sem nenhuma variável de ambiente —
+    # verificado empiricamente em 2026-09-01 durante E-00. Ver D-011.
+    image: localstack/localstack:4.14.0
+    container_name: wagering-localstack
+    environment:
+      SERVICES: sqs
+      # Filas FIFO exigidas por §10 do enunciado; a região é fixa para que o
+      # endpoint e os ARNs sejam determinísticos entre execuções.
+      AWS_DEFAULT_REGION: us-east-1
+      DEBUG: "0"
+    ports:
+      - "4566:4566"
+    healthcheck:
+      # O endpoint de health do próprio LocalStack, em vez de `awslocal`:
+      # não depende do CLI estar dentro da imagem e reporta serviço a serviço.
+      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health | grep -q '\"sqs\": \"available\"'"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  postgres-data:
