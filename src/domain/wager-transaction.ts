@@ -1,0 +1,334 @@
+import { InvalidTransactionStateError } from "./errors/invalid-transaction-state-error.ts";
+import { MissingReferenceError } from "./errors/missing-reference-error.ts";
+import { NoLedgerDirectionError } from "./errors/no-ledger-direction-error.ts";
+import type { BusinessFailureCode, FailureCode, InfrastructureFailureCode } from "./failure-code.ts";
+import { LedgerDirection } from "./ledger-direction.ts";
+import type { Money } from "./money.ts";
+
+/** Operações suportadas (§6.3). `OPENING` é interna — RN-13 a barra na borda. */
+export enum WagerTransactionKind {
+  Opening = "OPENING",
+  Bet = "BET",
+  Win = "WIN",
+  Loss = "LOSS",
+  Refund = "REFUND",
+  Rollback = "ROLLBACK",
+}
+
+/** Ciclo de vida da transação (§6.3). Os três últimos são terminais. */
+export enum WagerTransactionStatus {
+  /** Aceita, ainda não aplicada. */
+  Pending = "PENDING",
+  /** Aguardando a transação referenciada chegar (RN-15, RF-26). */
+  PendingReference = "PENDING_REFERENCE",
+  Processed = "PROCESSED",
+  Rejected = "REJECTED",
+  Failed = "FAILED",
+}
+
+/**
+ * Grafo de transições de D-013 — **fonte única** do ciclo de vida.
+ *
+ * Duas propriedades foram decididas e estão codificadas aqui:
+ *
+ * - **sem self-loop e sem volta para `PENDING`**: o reagendamento de uma
+ *   referência ausente é `UPDATE` nas colunas `reference_attempts` e
+ *   `next_reference_attempt_at` (E-05), não transição. Status é estado de
+ *   negócio; contador de tentativa é dado operacional, e misturar os dois
+ *   esconderia um contador dentro do grafo.
+ * - **terminal é "não tem saída"**: `isTerminal()` lê deste mesmo mapa em vez de
+ *   manter uma segunda lista de status terminais, que poderia divergir dele.
+ */
+const ALLOWED_TRANSITIONS: Readonly<
+  Record<WagerTransactionStatus, readonly WagerTransactionStatus[]>
+> = {
+  [WagerTransactionStatus.Pending]: [
+    WagerTransactionStatus.Processed,
+    WagerTransactionStatus.Rejected,
+    WagerTransactionStatus.Failed,
+    WagerTransactionStatus.PendingReference,
+  ],
+  [WagerTransactionStatus.PendingReference]: [
+    WagerTransactionStatus.Processed,
+    WagerTransactionStatus.Rejected,
+    WagerTransactionStatus.Failed,
+  ],
+  [WagerTransactionStatus.Processed]: [],
+  [WagerTransactionStatus.Rejected]: [],
+  [WagerTransactionStatus.Failed]: [],
+};
+
+/** Kinds que exigem `referenceExternalTransactionId` (RN-06). */
+const KINDS_REQUIRING_REFERENCE: readonly WagerTransactionKind[] = [
+  WagerTransactionKind.Refund,
+  WagerTransactionKind.Rollback,
+];
+
+/** Identidade e payload da transação — imutáveis do nascimento ao terminal. */
+export interface CreateWagerTransactionProps {
+  /** UUIDv7 interno (D-014). */
+  id: string;
+  providerId: string;
+  /** Id da transação no provedor — a metade externa de `(providerId, externalTransactionId)`. */
+  externalTransactionId: string;
+  /** Fonte da verdade da idempotência (RF-14). */
+  idempotencyKey: string;
+  /** SHA-256 canônico dos 10 campos de negócio (D-005). */
+  payloadHash: string;
+  walletId: string;
+  playerId: string;
+  roundId: string;
+  gameId: string;
+  kind: WagerTransactionKind;
+  money: Money;
+  /** Id **no provedor** da transação referenciada, não o id interno (RN-07). */
+  referenceExternalTransactionId?: string | undefined;
+  createdAt: Date;
+}
+
+/** Estado persistido: a identidade acima mais o que as transições escrevem. */
+export interface WagerTransactionState extends CreateWagerTransactionProps {
+  status: WagerTransactionStatus;
+  /** Id **interno** da referência, resolvido no processamento (RN-07). */
+  referenceTransactionId?: string | undefined;
+  failureCode?: FailureCode | undefined;
+  processedAt?: Date | undefined;
+}
+
+/**
+ * Transação de aposta — a unidade de trabalho do processamento (RF-03).
+ *
+ * Concentra o ciclo de vida (D-013) e as consultas que o use case faz antes de
+ * tocar saldo ou ledger. **Não** conhece wallet, repositório nem fila: quem
+ * orquestra é o use case de E-07, dentro de uma transação SQL única (RF-23).
+ */
+export class WagerTransaction {
+  public readonly id: string;
+  public readonly providerId: string;
+  public readonly externalTransactionId: string;
+  public readonly idempotencyKey: string;
+  public readonly payloadHash: string;
+  public readonly walletId: string;
+  public readonly playerId: string;
+  public readonly roundId: string;
+  public readonly gameId: string;
+  public readonly kind: WagerTransactionKind;
+  public readonly money: Money;
+  public readonly referenceExternalTransactionId: string | undefined;
+  public readonly createdAt: Date;
+
+  private _status: WagerTransactionStatus;
+  private _referenceTransactionId: string | undefined;
+  private _failureCode: FailureCode | undefined;
+  private _processedAt: Date | undefined;
+
+  /**
+   * Recebe o estado inteiro num objeto, não em parâmetros posicionais.
+   *
+   * A entidade tem nove campos de identificação em `string`; posicionalmente,
+   * trocar `providerId` por `playerId` compila e vira bug silencioso de
+   * roteamento financeiro. Nomear os campos fecha essa porta no compilador.
+   */
+  private constructor(state: WagerTransactionState) {
+    this.id = state.id;
+    this.providerId = state.providerId;
+    this.externalTransactionId = state.externalTransactionId;
+    this.idempotencyKey = state.idempotencyKey;
+    this.payloadHash = state.payloadHash;
+    this.walletId = state.walletId;
+    this.playerId = state.playerId;
+    this.roundId = state.roundId;
+    this.gameId = state.gameId;
+    this.kind = state.kind;
+    this.money = state.money;
+    this.referenceExternalTransactionId = state.referenceExternalTransactionId;
+    this.createdAt = state.createdAt;
+    this._status = state.status;
+    this._referenceTransactionId = state.referenceTransactionId;
+    this._failureCode = state.failureCode;
+    this._processedAt = state.processedAt;
+  }
+
+  /**
+   * Nasce em `PENDING` e valida a exigência de referência por kind (§6.3).
+   *
+   * A ausência de referência em `REFUND`/`ROLLBACK` é **payload inválido**
+   * (D-020), não rejeição de negócio: nenhuma transação chega a existir e D-006
+   * mapeia para `400`. Não valida RN-13 aqui — `OPENING` submetido externamente
+   * é regra de borda (E-08), e esta mesma factory cria o `OPENING` interno.
+   *
+   * @throws MissingReferenceError se o kind exigir referência e ela não vier.
+   */
+  static create(props: CreateWagerTransactionProps): WagerTransaction {
+    if (
+      KINDS_REQUIRING_REFERENCE.includes(props.kind) &&
+      props.referenceExternalTransactionId === undefined
+    ) {
+      throw new MissingReferenceError(props.kind);
+    }
+
+    return new WagerTransaction({ ...props, status: WagerTransactionStatus.Pending });
+  }
+
+  /**
+   * Reconstrói uma transação já persistida.
+   *
+   * **Não revalida transições** (§6.0): uma transação em `PROCESSED` lida do
+   * banco não é reconstruída passando por `PENDING`.
+   */
+  static rehydrate(state: WagerTransactionState): WagerTransaction {
+    return new WagerTransaction(state);
+  }
+
+  get status(): WagerTransactionStatus {
+    return this._status;
+  }
+
+  get referenceTransactionId(): string | undefined {
+    return this._referenceTransactionId;
+  }
+
+  get failureCode(): FailureCode | undefined {
+    return this._failureCode;
+  }
+
+  get processedAt(): Date | undefined {
+    return this._processedAt;
+  }
+
+  /**
+   * Marca a transação como aplicada.
+   *
+   * @param referenceTransactionId id interno da referência resolvida, quando houver (RN-07).
+   * @throws InvalidTransactionStateError se o status atual não permitir (D-013).
+   */
+  markProcessed(referenceTransactionId: string | undefined, at: Date): void {
+    this.transitionTo(WagerTransactionStatus.Processed);
+    this._referenceTransactionId = referenceTransactionId;
+    this._processedAt = at;
+  }
+
+  /**
+   * Marca que a referência ainda não chegou (RN-15, RF-26).
+   *
+   * Válida **apenas a partir de `PENDING`** (D-013): chamá-la sobre uma transação
+   * já em `PENDING_REFERENCE` lança, porque o reagendamento do worker de E-13 é
+   * `UPDATE` nas colunas de tentativa, não uma transição repetida.
+   *
+   * @throws InvalidTransactionStateError se o status atual não permitir.
+   */
+  markPendingReference(): void {
+    this.transitionTo(WagerTransactionStatus.PendingReference);
+  }
+
+  /**
+   * Rejeita por regra de negócio (RN-17).
+   *
+   * Aceita **apenas** códigos de negócio: D-013 reserva `FAILED` para
+   * infraestrutura, e o tipo do parâmetro é o que impede os dois de se
+   * misturarem sem depender de disciplina de quem escreve o use case.
+   *
+   * @throws InvalidTransactionStateError se o status atual não permitir.
+   */
+  reject(code: BusinessFailureCode): void {
+    this.transitionTo(WagerTransactionStatus.Rejected);
+    this._failureCode = code;
+  }
+
+  /**
+   * Marca falha permanente de infraestrutura ou esgotamento para DLQ (D-013).
+   *
+   * Erro **transitório não passa por aqui**: ele não toca o status e devolve a
+   * mensagem para retry. Marcar `FAILED` em indisponibilidade momentânea do
+   * Postgres queimaria transações recuperáveis, que é o oposto do cenário de
+   * recuperação que a §3 do enunciado exige que funcione.
+   *
+   * @throws InvalidTransactionStateError se o status atual não permitir.
+   */
+  fail(code: InfrastructureFailureCode): void {
+    this.transitionTo(WagerTransactionStatus.Failed);
+    this._failureCode = code;
+  }
+
+  /** Verdadeiro se o status atual não tem nenhuma transição de saída (D-013). */
+  isTerminal(): boolean {
+    return ALLOWED_TRANSITIONS[this._status].length === 0;
+  }
+
+  /** Falso só para `LOSS`, que registra o resultado sem mover saldo (RN-03). */
+  affectsBalance(): boolean {
+    return this.kind !== WagerTransactionKind.Loss;
+  }
+
+  /** Verdadeiro para `REFUND` e `ROLLBACK` (RN-06). */
+  requiresReference(): boolean {
+    return KINDS_REQUIRING_REFERENCE.includes(this.kind);
+  }
+
+  /**
+   * Verdadeiro se o payload recebido é o mesmo já registrado sob esta key.
+   *
+   * É o teste de RN-14: mesma idempotency key com hash diferente é **conflito**,
+   * não replay. A comparação é de hash canônico (D-005), não do payload cru.
+   */
+  matchesPayload(payloadHash: string): boolean {
+    return this.payloadHash === payloadHash;
+  }
+
+  /**
+   * Direção do lançamento que esta transação produz (RF-04).
+   *
+   * `ROLLBACK` é o único caso que não se decide pelo kind sozinho: RN-05 define o
+   * efeito como o **inverso da referência**, então estornar uma `BET` credita e
+   * estornar um `WIN` debita.
+   *
+   * @param reference transação referenciada, **obrigatória** para `ROLLBACK`.
+   * @throws NoLedgerDirectionError para `LOSS` (que não gera lançamento, RN-03)
+   * ou para `ROLLBACK` sem a referência resolvida.
+   */
+  ledgerDirectionFor(reference?: WagerTransaction): LedgerDirection {
+    switch (this.kind) {
+      case WagerTransactionKind.Opening:
+      case WagerTransactionKind.Win:
+      case WagerTransactionKind.Refund:
+        return LedgerDirection.Credit;
+
+      case WagerTransactionKind.Bet:
+        return LedgerDirection.Debit;
+
+      case WagerTransactionKind.Rollback: {
+        if (reference === undefined) {
+          throw new NoLedgerDirectionError(
+            `ROLLBACK ${this.id} precisa da referência resolvida: a direção é o inverso dela (RN-05).`,
+          );
+        }
+
+        return invert(reference.ledgerDirectionFor());
+      }
+
+      case WagerTransactionKind.Loss:
+        throw new NoLedgerDirectionError(
+          `LOSS ${this.id} não gera lançamento no ledger (RN-03). Consulte affectsBalance() antes.`,
+        );
+    }
+  }
+
+  /**
+   * Aplica uma transição do grafo de D-013 ou lança.
+   *
+   * Ponto único de mudança de `_status`: nenhuma transição escreve o campo
+   * direto, então não existe caminho que escape da validação.
+   */
+  private transitionTo(next: WagerTransactionStatus): void {
+    if (!ALLOWED_TRANSITIONS[this._status].includes(next)) {
+      throw new InvalidTransactionStateError(this._status, next);
+    }
+
+    this._status = next;
+  }
+}
+
+/** Inverte a direção de um lançamento — o estorno de RN-05. */
+function invert(direction: LedgerDirection): LedgerDirection {
+  return direction === LedgerDirection.Debit ? LedgerDirection.Credit : LedgerDirection.Debit;
+}

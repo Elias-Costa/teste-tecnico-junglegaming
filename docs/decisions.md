@@ -24,9 +24,9 @@ Registro leve de decisões, estilo ADR. Neste projeto ele tem **três** funçõe
 
 ## Fila de decisões em aberto
 
-**Vazia.** As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção, e a elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito. **Nenhuma etapa do `implementation-plan.md` está bloqueada.**
+**Vazia.** As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito — e **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas. **Nenhuma etapa do `implementation-plan.md` está bloqueada.**
 
-A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão, e como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila vazia não significa que não vão surgir mais.
+A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); e como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila vazia não significa que não vão surgir mais.
 
 ---
 
@@ -432,3 +432,92 @@ O desvio em relação ao esqueleto é deliberado e **precisa estar na ponta da l
 - A identidade do provedor contida na mensagem **continua sujeita às validações de domínio** (RN-07). Não autenticar não relaxa regra de negócio — este ponto precisa estar explícito na apresentação.
 - E-17 inclui a seção de `ARCHITECTURE.md`: qual IdP seria adotado, onde o guard entraria, o que mudaria no contrato da API.
 - Documentos atualizados: `docs/requirements.md` §7, `AGENTS.md` §3.
+
+---
+
+## D-018 — Retorno de `debit`/`credit`: o lançamento do ledger (2026-09-01)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna delegada **explicitamente** pelo enunciado. A §6.2 descreve `debit`/`credit` como "aplicam a movimentação mantendo saldo e ledger consistentes entre si" e acrescenta: "assinatura e retorno são decisão sua". RF-02 lista entre as invariantes que **toda alteração de saldo tem um lançamento correspondente no ledger, e vice-versa**. A decisão é, na prática, quem garante essa invariante.
+
+**Opções:**
+- **Devolver o `WalletLedgerEntry` criado** — a wallet é a única fonte de `balanceBefore`/`balanceAfter`, então ela é quem tem os dados para montar o lançamento.
+- **Devolver `void`** e deixar o use case montar o lançamento lendo o saldo antes e depois.
+- **Receber o lançamento pronto** (`wallet.apply(entry)`), com a wallet validando e aplicando.
+
+**Decisão:** `debit`/`credit` recebem `{ entryId, transactionId, money, at }` e **devolvem o `WalletLedgerEntry`** já criado e balanceado.
+
+**Justificativa:** é a única opção em que a invariante de RF-02 é **estrutural**. Não existe assinatura no agregado capaz de mover saldo sem entregar o lançamento junto — quem chama `debit` recebe o lançamento querendo ou não, e descartá-lo é visível no diff. Com `void`, a correspondência passaria a depender de o use case lembrar de montar o lançamento com os valores certos, e o esquecimento apareceria só na reconciliação de RF-16, muito depois. A terceira opção inverte a responsabilidade: quem monta o lançamento precisaria conhecer `balanceBefore` e `balanceAfter` **antes** de a wallet aplicar, que é exatamente o `read → calculate → update` que RI-07 proíbe.
+
+**Consequências:**
+- Ids (`entryId`) e instante (`at`) são **injetados**, não gerados no domínio. Segue o padrão que o próprio enunciado já usa em `Wallet.open`, que recebe `id` de fora, e mantém o domínio determinístico e livre de `Bun.randomUUIDv7()` (D-014).
+- **`Wallet.open` segue o mesmo princípio** e devolve `{ wallet, openingEntry }`. RF-08 e o exemplo da §9 exigem, juntos, saldo inicial **e** `version: 1` na resposta — o saldo nasce com a wallet, não por um `credit` posterior, que daria `version: 2`. Mas a abertura é mudança de saldo e precisa do lançamento correspondente. `openingEntry` é `undefined` quando o saldo inicial é zero, porque RF-08 só gera `OPENING` acima de zero.
+- E-07 e E-08 persistem o lançamento devolvido dentro da mesma transação SQL (RF-23).
+- Coberto por `tests/unit/wallet.test.ts`, incluindo a invariante final de §6.4 dos requisitos.
+
+---
+
+## D-019 — Saldo insuficiente: consulta no caminho de negócio, exceção como guarda (2026-09-01)
+
+**Status:** DECIDIDA
+**Contexto:** RN-01 rejeita `BET` sem saldo e RN-16 exige que "sem saldo para apostar" (`INSUFFICIENT_FUNDS`) e "sem saldo para reverter" (`INSUFFICIENT_FUNDS_ON_REVERSAL`) sejam códigos **distintos**. A wallet não sabe o kind da operação, então não pode escolher o código. A pergunta é como a condição sai do agregado.
+
+**Opções:**
+- **Consulta `hasSufficientBalanceFor()` + `debit` lançando** como guarda de último recurso.
+- **Só exceção**: `debit` lança `InsufficientFundsError` e o use case captura e traduz pelo kind.
+- **Só consulta**: `debit` confia no chamador.
+
+**Decisão:** as duas coisas. `Wallet.hasSufficientBalanceFor(money)` é o **caminho de negócio** — o use case consulta e decide o `failureCode` pelo kind — e `debit` **ainda lança** `InsufficientFundsError` se for chamado sem cobertura.
+
+**Justificativa:** as duas metades resolvem problemas diferentes e nenhuma resolve a do outro. A consulta mantém a rejeição — que é o caminho **esperado**, não excepcional — fora do controle de fluxo por exceção, e deixa a escolha do código com quem sabe o kind. A guarda existe porque EL-02 é eliminatória: um caminho novo que esqueça a consulta precisa falhar alto, não gravar saldo negativo e esperar o `CHECK` do banco de E-05 ser a única barreira. Barreira única é barreira pouca quando a falha invalida a entrega inteira.
+
+**Consequências:**
+- `InsufficientFundsError` carrega saldo e valor pedido em campos, para o log estruturado de RNF-06.
+- `hasSufficientBalanceFor` valida a moeda antes do valor (D-017), na mesma ordem que as regras de negócio já têm.
+- E-12 mapeia a condição para `INSUFFICIENT_FUNDS` ou `INSUFFICIENT_FUNDS_ON_REVERSAL` conforme o kind.
+- `tests/unit/wallet.test.ts` prova que o débito acima do saldo é recusado **sem** consulta prévia e deixa saldo, `version` e `updatedAt` intactos.
+
+---
+
+## D-020 — Referência ausente em `REFUND`/`ROLLBACK`: payload inválido (2026-09-01)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna descoberta em E-03, ao escrever a validação de `WagerTransaction.create`. RN-06 diz que `REFUND` e `ROLLBACK` exigem `referenceExternalTransactionId` e que "ausência é rejeição, não aceite". Mas D-007 fechou a taxonomia em 13 códigos e **nenhum deles descreve "a referência não veio no payload"**: `REFERENCE_NOT_FOUND` é o esgotamento do TTL de RF-26, situação em que o provedor mandou a referência e ela nunca apareceu. Uma rejeição sem código correspondente não é representável — `reject()` exige um `FailureCode`.
+
+**Opções:**
+- **Erro de payload em `create()`** → `400` por D-006; nenhuma transação nasce e o enum segue fechado em 13.
+- **`REJECTED` com um 14º código** (`MISSING_REFERENCE`) — auditável no banco, mas reabre D-007.
+- **`REJECTED` reusando `REFERENCE_NOT_FOUND`** — mantém 13 códigos, mas colapsa duas situações.
+
+**Decisão:** **payload inválido.** `WagerTransaction.create` lança `MissingReferenceError`, D-006 mapeia para `400` e nenhuma transação chega a existir.
+
+**Justificativa:** a §7.2 do enunciado define o critério de qualidade da taxonomia: o código precisa bastar para o provedor decidir entre reenviar, corrigir o payload ou desistir. Reusar `REFERENCE_NOT_FOUND` destruiria exatamente essa distinção — "você não mandou a referência" (corrigir e reenviar, resolve na hora) e "esperamos 15 minutos e ela nunca chegou" (desistir ou investigar a origem) viriam com o mesmo código. E criar um 14º código para representar um campo obrigatório ausente confundiria as duas camadas: a validação de forma do payload é o que D-006 já mapeia para `400`, junto com `Idempotency-Key` ausente (RF-13) e valor monetário malformado (RF-01). Referência ausente é o mesmo tipo de erro que esses dois, não uma decisão de negócio.
+
+**Consequências:**
+- `create()` valida a exigência de referência por kind, como a §6.3 do enunciado descreve, e lança `MissingReferenceError`.
+- O enum de D-007 **continua fechado em 13**.
+- E-08 mapeia `MissingReferenceError` para `400` junto com `InvalidMoneyError`.
+- **Limitação conhecida para `ARCHITECTURE.md`:** uma submissão sem referência não deixa registro auditável no banco, porque nenhuma transação nasce. É o mesmo tratamento que qualquer payload malformado recebe, e o rastro fica no log estruturado (RNF-06) — não no ledger.
+- `docs/requirements.md` RN-06 atualizado.
+
+---
+
+## D-021 — Movimentação de valor zero: recusada (2026-09-01)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna descoberta em E-03. `Money.from({ amount: "0.00" })` é válido — a escala de D-015 aceita zero —, então um `WIN` de `0.00` chegaria a `Wallet.credit()`. RF-02 exige que `version` incremente **somente quando o saldo muda** e RF-04 diz que operações sem efeito no saldo **não geram lançamento**. Um movimento de valor zero viola uma das duas, dependendo de como for tratado.
+
+**Opções:**
+- **Exigir valor estritamente positivo** em `debit`/`credit`, lançando.
+- **Aceitar zero sem incrementar `version`** — cumpre RF-02 ao pé da letra, mas cria lançamento sem mudança de saldo, contra RF-04.
+- **Aceitar zero e incrementar `version`** — mais simples, mas contraria RF-02 literalmente.
+
+**Decisão:** **`debit` e `credit` exigem valor estritamente positivo** e lançam `InvalidLedgerEntryError` em zero ou negativo. A mesma regra vale na factory de `WalletLedgerEntry`.
+
+**Justificativa:** é a única opção que satisfaz RF-02 e RF-04 ao mesmo tempo, e satisfaz RF-02 **por construção** em vez de por ramificação: `debit`/`credit` são o único caminho que muda saldo, e nenhum deles é chamado com movimento nulo, então "incrementa somente quando o saldo muda" deixa de precisar de um `if`. Recusar negativo tem justificativa própria e independente: `LedgerDirection` já carrega o sinal do movimento, e um valor negativo com direção codificaria o sinal duas vezes — duas fontes para o mesmo fato é como divergência de sinal entra sem ninguém ver.
+
+**Consequências:**
+- Valor zero vindo de fora vira **payload inválido** (`400`) na validação de E-08, não rejeição de negócio: o enum de D-007 segue fechado em 13, pelo mesmo argumento de D-020.
+- `WalletLedgerEntry.create` recusa valor não positivo, o que fecha a porta também para quem construir lançamento sem passar pela wallet.
+- RT-02 ganha um teste explícito de que nenhuma operação recusada — saldo insuficiente, moeda divergente, valor zero, valor negativo — altera saldo, `version` ou `updatedAt`.
+- `docs/requirements.md` RF-02 e RF-04 atualizados.

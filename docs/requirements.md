@@ -44,7 +44,11 @@ Representa dinheiro de forma exata e imutável. Toda operação retorna nova ins
 - Construtor privado; factories `open(props)` e `rehydrate(state)`.
 - Estado encapsulado: `_balance`, `_version`, `_updatedAt` expostos só por getter.
 - Métodos `debit` / `credit` aplicam a movimentação mantendo saldo e ledger consistentes entre si.
+- **`debit` e `credit` devolvem o `WalletLedgerEntry` que criaram** — `[DECIDIDO: D-018]`, lacuna delegada em texto pela §6.2 ("assinatura e retorno são decisão sua"). É o que torna a invariante saldo↔ledger estrutural: não existe assinatura no agregado capaz de mover saldo sem entregar o lançamento junto. `open` segue o mesmo princípio e devolve `{ wallet, openingEntry }`, com `openingEntry` `undefined` quando o saldo inicial é zero (RF-08).
+- **Movimentação exige valor estritamente positivo** — `[DECIDIDO: D-021]`. Valor zero ou negativo é recusado por `debit`/`credit`; a direção do lançamento é quem carrega o sinal.
 - Invariantes: no máximo **uma wallet por `playerId` + `currency`**; saldo nunca negativo; moeda da operação igual à da wallet; toda alteração de saldo tem lançamento correspondente no ledger e vice-versa.
+- A unicidade por `playerId` + `currency` **não é do agregado** — é invariante entre agregados e vai para o `UNIQUE` do schema em E-05 (RI-09).
+- Saldo insuficiente sai do domínio por **consulta** (`hasSufficientBalanceFor`), com `debit` lançando como guarda de último recurso — `[DECIDIDO: D-019]`. A escolha entre `INSUFFICIENT_FUNDS` e `INSUFFICIENT_FUNDS_ON_REVERSAL` (RN-16) é do use case, que é quem sabe o kind.
 - `version` inicia em `1` após a criação e **incrementa somente quando o saldo muda**.
 
 **RF-03 — Entidade `WagerTransaction`**
@@ -57,6 +61,8 @@ Representa dinheiro de forma exata e imutável. Toda operação retorna nova ins
 - Consultas de domínio: `isTerminal`, `affectsBalance` (**false para `LOSS`**), `requiresReference` (**true para `REFUND` e `ROLLBACK`**), `matchesPayload(payloadHash)`, `ledgerDirectionFor(reference?)`.
 - **Grafo de transições fechado** — `[DECIDIDO: D-013]`. `PENDING → {PROCESSED, REJECTED, FAILED, PENDING_REFERENCE}`; `PENDING_REFERENCE → {PROCESSED, REJECTED, FAILED}`. Sem self-loop e sem volta para `PENDING`: o contador de tentativas vive em colunas próprias, não no status.
 - **`FAILED` só em erro permanente de infraestrutura ou esgotamento para DLQ** — `[DECIDIDO: D-013]`. Erro transitório não altera o status.
+- **`reject` e `fail` aceitam famílias de código distintas, impostas pelo tipo** — `[DECIDIDO: D-007]`. `reject(BusinessFailureCode)` cobre os 11 códigos de negócio; `fail(InfrastructureFailureCode)` cobre os 2 de infraestrutura. A separação de D-013 vira erro de compilação, não convenção.
+- **Referência ausente em `REFUND`/`ROLLBACK` é payload inválido, não rejeição** — `[DECIDIDO: D-020]`. `create` lança `MissingReferenceError` e nenhuma transação nasce; D-006 mapeia para `400`. Ver RN-06.
 
 **RF-04 — Entidade imutável `WalletLedgerEntry`**
 *Aceite:*
@@ -65,6 +71,7 @@ Representa dinheiro de forma exata e imutável. Toda operação retorna nova ins
 - Direções: `DEBIT` / `CREDIT`.
 - Uma transação financeira produz **no máximo um lançamento por wallet**.
 - Operações sem efeito no saldo (`LOSS` e qualquer transação `REJECTED`) **não geram lançamento**.
+- **O valor do lançamento é estritamente positivo** — `[DECIDIDO: D-021]`. `create` recusa zero e negativo: a direção `DEBIT`/`CREDIT` é quem carrega o sinal, e codificá-lo duas vezes criaria duas fontes para o mesmo fato.
 
 **RF-05 — `InboxMessage`**
 Deduplicação persistente de mensagens consumidas, por `(consumerName, messageId)`.
@@ -175,7 +182,7 @@ Submete uma operação de aposta.
 | **RN-04** | `REFUND` | crédito | 1 entrada `CREDIT` | reverte uma `BET` `PROCESSED`, **uma única vez** |
 | **RN-05** | `ROLLBACK` | inverso da referência | 1 entrada invertida | reverte uma transação `PROCESSED`, **uma única vez** |
 
-**RN-06** — `REFUND` e `ROLLBACK` exigem `referenceExternalTransactionId`. Ausência é rejeição, não aceite.
+**RN-06** — `REFUND` e `ROLLBACK` exigem `referenceExternalTransactionId`. Ausência é rejeição, não aceite. **A ausência é tratada como payload inválido (`400`), não como transação `REJECTED`** — `[DECIDIDO: D-020]`, lacuna do enunciado resolvida: a taxonomia de D-007 está fechada em 13 códigos e nenhum descreve "a referência não veio no payload" (`REFERENCE_NOT_FOUND` é o esgotamento do TTL de RF-26). `WagerTransaction.create` lança `MissingReferenceError` e nenhuma transação chega a existir.
 
 **RN-07** — A referência é resolvida por `(providerId, referenceExternalTransactionId)` e deve pertencer ao **mesmo provider, player, wallet, moeda e rodada**. Qualquer divergência é rejeição.
 
@@ -198,7 +205,7 @@ Submete uma operação de aposta.
 **RN-16** — Reversão que produziria saldo negativo é **rejeitada explicitamente**, com um `failureCode` **distinto** do de uma aposta sem saldo — são situações operacionalmente diferentes — e permanece auditável.
 
 **RN-17 — Taxonomia de `failureCode`**
-Toda rejeição carrega um `failureCode` estável e legível por máquina, suficiente para o provedor decidir se **reenvia**, **corrige o payload** ou **desiste**. `[DECIDIDO: D-007]` — enum fechado de 11 códigos de negócio, com a ação esperada documentada por código em `ARCHITECTURE.md` (documentada, não transmitida). Os códigos de infraestrutura para o status `FAILED` seguem pendentes em D-007.
+Toda rejeição carrega um `failureCode` estável e legível por máquina, suficiente para o provedor decidir se **reenvia**, **corrige o payload** ou **desiste**. `[DECIDIDO: D-007]` — enum fechado de 11 códigos de negócio, com a ação esperada documentada por código em `ARCHITECTURE.md` (documentada, não transmitida). Os **2 códigos de infraestrutura** para o status `FAILED` (`PERMANENT_INFRASTRUCTURE_ERROR` e `MAX_RETRIES_EXHAUSTED`) foram aprovados em D-007, fechando o enum em **13**.
 
 ---
 

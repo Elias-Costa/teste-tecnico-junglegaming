@@ -8,9 +8,9 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 
 ## Estado atual
 
-> **E-00, E-01 e E-02 CONCLUÍDAS** (2026-09-01). Stack validada de ponta a ponta, fundação de pé e a primeira regra de negócio fechada com teste.
-> `bun run check` = typecheck limpo, lint limpo, **58 unitários verdes**. `bun run check:full` = mais 2 de integração, autoprovisionados.
-> **Etapa atual: E-03 — Domínio: `Wallet`, `WagerTransaction`, `WalletLedgerEntry`.**
+> **E-00, E-01, E-02 e E-03 CONCLUÍDAS** (2026-09-01). Stack validada de ponta a ponta, fundação de pé e o núcleo de negócio fechado com teste.
+> `bun run check` = typecheck limpo, lint limpo, **127 unitários verdes**. `bun run check:full` = mais 2 de integração, autoprovisionados.
+> **Etapa atual: E-04 — Domínio: mensageria e eventos.**
 >
 > **Achados do spike que valem para todas as etapas seguintes:**
 > - MikroORM v7 **não tem decorators** — mapeamento por `EntitySchema`. Isso torna a fronteira domínio/ORM estrutural em vez de convencional.
@@ -24,13 +24,22 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 > - `InvalidMoneyError` cobre valor e moeda malformados; D-006 mapeia os dois para `400`.
 > - A guarda de lint de EL-01 foi reverificada com sonda: dispara em `src/domain/`.
 >
-> **Decisões em vigor:** D-001 MikroORM **sem plano B** · D-003 `Money` sobre **`bigint` de centavos** · D-004 coluna **`numeric(19,2)`** + mapper próprio · D-007 (13 `failureCode` fechados) · D-009 (outbox por claim com lease) · D-011 infra de teste **híbrida** · D-012 auth **não implementada** · D-013 (grafo sem self-loop; `FAILED` só em erro permanente ou DLQ) · D-014 (ids UUIDv7, cursor keyset de coluna única) · D-015 (escala de entrada exatamente 2 casas) · **D-016** (`currency` validada por forma `[A-Z]{3}`, sem tabela ISO) · **D-017** (`equals` lança em moeda diferente).
+> **O que E-03 deixou para as etapas seguintes:**
+> - **`Wallet.debit`/`credit` devolvem o `WalletLedgerEntry` (D-018)** e `Wallet.open` devolve `{ wallet, openingEntry }`. E-06 persiste o lançamento devolvido; E-07 e E-08 o gravam na **mesma** transação SQL da wallet (RF-23). Descartar o retorno é descartar o ledger.
+> - **Ids e instantes são injetados**, nunca gerados no domínio: `entryId`, `transactionId`, `openingEntryId`, `at`. Quem chama `Bun.randomUUIDv7()` (D-014) é a camada de aplicação.
+> - **Saldo insuficiente tem dois caminhos por decisão (D-019):** `hasSufficientBalanceFor()` é o caminho de negócio de E-12, que escolhe entre `INSUFFICIENT_FUNDS` e `INSUFFICIENT_FUNDS_ON_REVERSAL` (RN-16); a exceção de `debit` é guarda, não fluxo.
+> - **`reject` e `fail` têm tipos de código diferentes.** `reject(BusinessFailureCode)` e `fail(InfrastructureFailureCode)` — a separação de D-013 é imposta pelo compilador, então o consumidor de E-11 não consegue marcar `FAILED` com código de negócio.
+> - **Dois erros novos vão para o mapa de `400` em E-08:** `MissingReferenceError` (D-020) e `InvalidLedgerEntryError` quando o valor da movimentação é zero (D-021). Somam-se a `InvalidMoneyError`.
+> - `NoLedgerDirectionError` marca uso indevido: `ledgerDirectionFor()` em `LOSS`, ou em `ROLLBACK` sem a referência resolvida. E-12 consulta `affectsBalance()` antes e resolve a referência antes.
+> - A unicidade `(playerId, currency)` **não está no agregado** — é invariante entre agregados e depende do `UNIQUE` de E-05 (RI-09).
+>
+> **Decisões em vigor:** D-001 MikroORM **sem plano B** · D-003 `Money` sobre **`bigint` de centavos** · D-004 coluna **`numeric(19,2)`** + mapper próprio · D-007 (13 `failureCode` fechados) · D-009 (outbox por claim com lease) · D-011 infra de teste **híbrida** · D-012 auth **não implementada** · D-013 (grafo sem self-loop; `FAILED` só em erro permanente ou DLQ) · D-014 (ids UUIDv7, cursor keyset de coluna única) · D-015 (escala de entrada exatamente 2 casas) · D-016 (`currency` validada por forma `[A-Z]{3}`, sem tabela ISO) · D-017 (`equals` lança em moeda diferente) · **D-018** (`debit`/`credit` devolvem o lançamento) · **D-019** (saldo insuficiente: consulta + guarda) · **D-020** (referência ausente é payload inválido) · **D-021** (movimentação exige valor estritamente positivo).
 >
 > Também decidido: D-002 (pessimistic `FOR UPDATE` por wallet) · D-005 (SHA-256 sobre lista fechada de 10 campos) · D-006 (`400`/`409`/`422`/`202`/`503`) · D-008 (defaults conservadores e configuráveis por ambiente).
 >
 > D-010 (`prom-client` em `GET /metrics`).
 >
-> **Fila de decisões vazia — nenhuma etapa bloqueada.** As 15 decisões que o enunciado delegava estão fechadas e registradas, mais D-016 e D-017, que E-02 expôs e o mantenedor fechou antes de o código ser escrito. Se a implementação expuser uma decisão não prevista, ela **para a etapa** e vai para `docs/decisions.md` (`AGENTS.md` §0).
+> **Fila de decisões vazia — nenhuma etapa bloqueada.** As 15 decisões que o enunciado delegava estão fechadas e registradas, mais D-016 e D-017 (expostas por E-02) e D-018 a D-021 (expostas por E-03), todas fechadas pelo mantenedor antes de o código ser escrito. Se a implementação expuser uma decisão não prevista, ela **para a etapa** e vai para `docs/decisions.md` (`AGENTS.md` §0).
 
 ---
 
@@ -115,14 +124,24 @@ Não é arquitetura. É descobrir, na hora 2 e não na hora 40, se a stack fecha
 
 **Ler antes:** RF-02, RF-03, RF-04, RN-01..RN-17, RT-02, RT-03, RT-06, RT-07; D-013.
 **Escopo:**
-- [ ] `Wallet` com construtor privado, `open`/`rehydrate`, `debit`/`credit`, invariantes (RF-02).
-- [ ] `WagerTransaction` com o grafo fechado de D-013 — **sem self-loop e sem volta para `PENDING`** — e as consultas de domínio (RF-03).
-- [ ] `markPendingReference()` válida **apenas** a partir de `PENDING`; chamá-la sobre `PENDING_REFERENCE` lança `InvalidTransactionStateError`. O reagendamento é `UPDATE` de colunas, não transição (D-013).
-- [ ] `WalletLedgerEntry` estruturalmente imutável, com `isBalanced()` validado na factory (RF-04).
-- [ ] Enum fechado `FailureCode` com os **13 códigos** de D-007: 11 de rejeição por regra de negócio + `PERMANENT_INFRASTRUCTURE_ERROR` e `MAX_RETRIES_EXHAUSTED` para o status `FAILED`.
-- [ ] Testes RT-02, RT-03, RT-06, RT-07.
+- [x] `Wallet` com construtor privado, `open`/`rehydrate`, `debit`/`credit`, invariantes (RF-02). — `src/domain/wallet.ts`.
+- [x] `WagerTransaction` com o grafo fechado de D-013 — **sem self-loop e sem volta para `PENDING`** — e as consultas de domínio (RF-03). — `ALLOWED_TRANSITIONS` é fonte única: `isTerminal()` é "não tem transição de saída", não uma segunda lista.
+- [x] `markPendingReference()` válida **apenas** a partir de `PENDING`; chamá-la sobre `PENDING_REFERENCE` lança `InvalidTransactionStateError`. O reagendamento é `UPDATE` de colunas, não transição (D-013).
+- [x] `WalletLedgerEntry` estruturalmente imutável, com `isBalanced()` validado na factory (RF-04).
+- [x] Enum fechado `FailureCode` com os **13 códigos** de D-007: 11 de rejeição por regra de negócio + `PERMANENT_INFRASTRUCTURE_ERROR` e `MAX_RETRIES_EXHAUSTED` para o status `FAILED`. — dois enums (`BusinessFailureCode`, `InfrastructureFailureCode`) unidos por `type FailureCode`, o que faz o compilador impor a separação de D-013 em `reject`/`fail`.
+- [x] Testes RT-02, RT-03, RT-06, RT-07. — 69 testes em 3 arquivos.
+- [x] **Quatro decisões novas, expostas pela etapa e fechadas antes do código:** D-018 (retorno de `debit`/`credit`, delegado em texto pela §6.2), D-019 (saldo insuficiente: consulta + guarda), D-020 (referência ausente é payload inválido) e D-021 (movimentação exige valor estritamente positivo). Não estavam previstas no escopo original desta etapa.
 
-**Critério de conclusão:** suíte unitária verde. `version` incrementa **só** quando o saldo muda (RT-02).
+**Critério de conclusão — atendido:**
+- `bun run check` passa: `tsc --noEmit` limpo, `eslint .` limpo, **127 testes unitários verdes** (58 de E-01/E-02 + 69 de E-03).
+- **RT-02**: `version` nasce em `1`, não muda em nenhuma leitura de estado e incrementa a cada `debit`/`credit`. O teste que fecha a regra é o das quatro recusas — saldo insuficiente, moeda divergente, valor zero e valor negativo —, que verifica saldo, `version` e `updatedAt` intactos em todas: é no caminho de erro que "incrementa só quando o saldo muda" costuma quebrar sem ninguém ver.
+- **RT-07**: matriz completa 5 status × 4 transições, montada a partir do grafo transcrito de D-013 e não do código sob teste; os três terminais recusam as quatro transições, e `markPendingReference()` sobre `PENDING_REFERENCE` lança com `from`/`to` corretos.
+- **RT-06**: `isBalanced()` nas duas direções, recusa de lançamento desbalanceado, de direção invertida sobre valores válidos, de valor zero, de valor negativo e de moedas divergentes. Mais um teste estrutural: `WalletLedgerEntry.prototype` não expõe nenhum método além de `isBalanced` — falha no dia em que alguém acrescentar um mutador, que é o dia em que RI-05 seria violada.
+- **RT-03** na parte que é de domínio: `affectsBalance` falso só para `LOSS`, `requiresReference` verdadeiro só para `REFUND`/`ROLLBACK`, e `ledgerDirectionFor` com `ROLLBACK` invertendo `BET`, `WIN` e `REFUND` (RN-05).
+- **Invariante final de §6.4 dos requisitos**: uma sequência `OPENING → BET → WIN → REFUND` reconstrói o saldo a partir dos lançamentos devolvidos e compara com `wallet.balance`.
+- **EL-02 provada, não afirmada:** `debit` recusa débito acima do saldo **sem consulta prévia** e deixa a wallet intacta — o agregado não tem caminho permissivo, independentemente do que o use case fizer. A prova sob concorrência real é de E-09; esta é a prova de que não há brecha na unidade.
+- **EL-07:** lançamento imutável por estrutura, aritmética validada na factory e saldo reconstruível pelo ledger.
+- **EL-01:** nenhum `Number`/`toFixed`/`Math`/`parseFloat` entrou — toda aritmética passa por `Money`, e `bun run lint` roda a regra de E-01 sobre os três arquivos novos.
 
 ## E-04 — Domínio: mensageria e eventos
 
