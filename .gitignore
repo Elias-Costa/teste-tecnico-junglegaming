@@ -1,0 +1,26 @@
+node_modules/
+dist/
+build/
+coverage/
+.claude/
+
+# Bun — o lockfile (bun.lock / bun.lockb) É versionado de propósito:
+# D-001 fixa versões exatas, e sem lockfile a reprodutibilidade some.
+.bun/
+
+# Ambiente — o .env.example é versionado, o resto não
+.env
+.env.*
+!.env.example
+
+# Editor / SO
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Saída de teste e temporários
+*.log
+tmp/
+.tmp/
