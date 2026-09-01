@@ -8,9 +8,9 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 
 ## Estado atual
 
-> **E-00, E-01, E-02 e E-03 CONCLUÍDAS** (2026-09-01). Stack validada de ponta a ponta, fundação de pé e o núcleo de negócio fechado com teste.
-> `bun run check` = typecheck limpo, lint limpo, **127 unitários verdes**. `bun run check:full` = mais 2 de integração, autoprovisionados.
-> **Etapa atual: E-04 — Domínio: mensageria e eventos.**
+> **E-00 a E-04 CONCLUÍDAS** (2026-09-01). Stack validada de ponta a ponta, fundação de pé, núcleo de negócio fechado com teste e a camada de mensageria do domínio pronta.
+> `bun run check` = typecheck limpo, lint limpo, **174 unitários verdes**. `bun run check:full` = mais 2 de integração, autoprovisionados.
+> **Etapa atual: E-05 — Schema e migrations.**
 >
 > **Achados do spike que valem para todas as etapas seguintes:**
 > - MikroORM v7 **não tem decorators** — mapeamento por `EntitySchema`. Isso torna a fronteira domínio/ORM estrutural em vez de convencional.
@@ -33,13 +33,22 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 > - `NoLedgerDirectionError` marca uso indevido: `ledgerDirectionFor()` em `LOSS`, ou em `ROLLBACK` sem a referência resolvida. E-12 consulta `affectsBalance()` antes e resolve a referência antes.
 > - A unicidade `(playerId, currency)` **não está no agregado** — é invariante entre agregados e depende do `UNIQUE` de E-05 (RI-09).
 >
-> **Decisões em vigor:** D-001 MikroORM **sem plano B** · D-003 `Money` sobre **`bigint` de centavos** · D-004 coluna **`numeric(19,2)`** + mapper próprio · D-007 (13 `failureCode` fechados) · D-009 (outbox por claim com lease) · D-011 infra de teste **híbrida** · D-012 auth **não implementada** · D-013 (grafo sem self-loop; `FAILED` só em erro permanente ou DLQ) · D-014 (ids UUIDv7, cursor keyset de coluna única) · D-015 (escala de entrada exatamente 2 casas) · D-016 (`currency` validada por forma `[A-Z]{3}`, sem tabela ISO) · D-017 (`equals` lança em moeda diferente) · **D-018** (`debit`/`credit` devolvem o lançamento) · **D-019** (saldo insuficiente: consulta + guarda) · **D-020** (referência ausente é payload inválido) · **D-021** (movimentação exige valor estritamente positivo).
+> **O que E-04 deixou para as etapas seguintes:**
+> - **E-05 cria as colunas que as entidades já esperam:** na outbox, `attempts`, `next_attempt_at`, `published_at`, `locked_by` e `locked_until` (D-009); na inbox, o `UNIQUE (consumer_name, message_id)` — a entidade **não tem id próprio** de propósito, a identidade é o par.
+> - **O `payload` da outbox é o `toJSON()` do evento, já serializado.** A linha precisa sobreviver a mudanças de código: republicar reidratando a classe de evento de seis meses atrás acoplaria a fila ao código vigente. A coluna é `jsonb`.
+> - **`scheduleRetry(now, policy)` recebe a política (D-022).** A curva é do domínio, os números são da infra. E-10 preenche `RetryPolicy` a partir do ambiente com os defaults de D-008, e o mesmo tipo serve aos outros dois loops (DLQ de E-11, referências de E-13) — não criar uma segunda curva.
+> - **`markPublished` e `markProcessed` não guardam contra remarcação.** É deliberado: D-009 assume entrega at-least-once e RF-19 resolve reentrega por `isProcessed()` no início do consumo, não por exceção. Quem transformar isso em transição guardada quebra o caminho normal de E-10 e E-11.
+> - **`isDue` olha só `nextAttemptAt`; a disputa pelo lease é do banco.** E-10 usa `SKIP LOCKED` no subselect do claim; `isClaimed(now)` existe para leitura e teste, não para decidir quem publica.
+> - **Ficou em aberto para E-10, por não ser do domínio:** se o `UPDATE` que marca `published_at` também limpa `locked_by`/`locked_until`. A entidade não limpa, para não divergir do SQL que ainda não existe.
+> - **`WagerTransactionRejected.from` recebe o `BusinessFailureCode` por parâmetro**, não lê `transaction.failureCode` — o getter é a união com os códigos de infraestrutura, e o parâmetro tipado é o que faz o compilador impor RF-25.
+>
+> **Decisões em vigor:** D-001 MikroORM **sem plano B** · D-003 `Money` sobre **`bigint` de centavos** · D-004 coluna **`numeric(19,2)`** + mapper próprio · D-007 (13 `failureCode` fechados) · D-009 (outbox por claim com lease) · D-011 infra de teste **híbrida** · D-012 auth **não implementada** · D-013 (grafo sem self-loop; `FAILED` só em erro permanente ou DLQ) · D-014 (ids UUIDv7, cursor keyset de coluna única) · D-015 (escala de entrada exatamente 2 casas) · D-016 (`currency` validada por forma `[A-Z]{3}`, sem tabela ISO) · D-017 (`equals` lança em moeda diferente) · **D-018** (`debit`/`credit` devolvem o lançamento) · **D-019** (saldo insuficiente: consulta + guarda) · **D-020** (referência ausente é payload inválido) · **D-021** (movimentação exige valor estritamente positivo) · **D-022** (backoff equal jitter, política injetada na chamada).
 >
 > Também decidido: D-002 (pessimistic `FOR UPDATE` por wallet) · D-005 (SHA-256 sobre lista fechada de 10 campos) · D-006 (`400`/`409`/`422`/`202`/`503`) · D-008 (defaults conservadores e configuráveis por ambiente).
 >
 > D-010 (`prom-client` em `GET /metrics`).
 >
-> **Fila de decisões vazia — nenhuma etapa bloqueada.** As 15 decisões que o enunciado delegava estão fechadas e registradas, mais D-016 e D-017 (expostas por E-02) e D-018 a D-021 (expostas por E-03), todas fechadas pelo mantenedor antes de o código ser escrito. Se a implementação expuser uma decisão não prevista, ela **para a etapa** e vai para `docs/decisions.md` (`AGENTS.md` §0).
+> **Fila de decisões vazia — nenhuma etapa bloqueada.** As 15 decisões que o enunciado delegava estão fechadas e registradas, mais D-016 e D-017 (expostas por E-02), D-018 a D-021 (expostas por E-03) e D-022 (exposta por E-04), todas fechadas pelo mantenedor antes de o código ser escrito. Se a implementação expuser uma decisão não prevista, ela **para a etapa** e vai para `docs/decisions.md` (`AGENTS.md` §0).
 
 ---
 
@@ -147,11 +156,19 @@ Não é arquitetura. É descobrir, na hora 2 e não na hora 40, se a stack fecha
 
 **Ler antes:** RF-05, RF-06, RF-07, RF-25.
 **Escopo:**
-- [ ] `InboxMessage` e `OutboxMessage` (RF-05, RF-06), incluindo `scheduleRetry` com a curva de D-008 e os campos de lease (`lockedBy`, `lockedUntil`) exigidos por D-009.
-- [ ] `IntegrationEvent` **abstrata** + as quatro subclasses concretas de RF-25, com `eventType` e `version` no tipo.
-- [ ] `toJSON()` com envelope estável; `data` carregando `MoneyProps`, nunca `Money`.
+- [x] `InboxMessage` e `OutboxMessage` (RF-05, RF-06), incluindo `scheduleRetry` com a curva de D-008 e os campos de lease (`lockedBy`, `lockedUntil`) exigidos por D-009. — `src/domain/inbox-message.ts`, `src/domain/outbox-message.ts`.
+- [x] `IntegrationEvent` **abstrata** + as quatro subclasses concretas de RF-25, com `eventType` e `version` no tipo. — `src/domain/events/`.
+- [x] `toJSON()` com envelope estável; `data` carregando `MoneyProps`, nunca `Money`.
+- [x] **Uma decisão nova, exposta pela etapa e fechada antes do código:** D-022 (forma da curva de backoff e como a política chega ao domínio). D-008 fixava os limites, não a curva. Não estava prevista no escopo original desta etapa.
 
-**Critério de conclusão:** teste que serializa cada um dos quatro eventos e confere o envelope campo a campo.
+**Critério de conclusão — atendido:**
+- `bun run check` passa: `tsc --noEmit` limpo, `eslint .` limpo, **174 testes unitários verdes** (127 de E-01/E-02/E-03 + 47 de E-04).
+- **Critério literal da etapa:** os quatro eventos de RF-25 são montados e serializados, e o envelope é conferido campo a campo — `eventId`, `eventType`, `aggregateId`, `correlationId`, `causationId` (nos dois estados), `occurredAt` em ISO-8601, `version` e `data` inteiro. Mais quatro testes que valem para os quatro de uma vez: `eventType`/`version` vindos do tipo, `occurredAt` como string, `causationId` ausente como **chave omitida** e round-trip `JSON.parse(JSON.stringify(...))` idêntico ao original.
+- **Curva de D-022:** com `random` fixo em `0` e `1`, as faixas conferem degrau a degrau — `[500, 1000]` na primeira falha, dobrando até saturar em `[150000, 300000]` no teto de 5 min de D-008. Mais o piso (`mínimo = máximo / 2`, que é o que separa equal jitter de full jitter), o agendamento sempre em milissegundo inteiro e uma contagem de 5.000 tentativas vinda do banco que **não** produz `Infinity` — sem o limite de expoente, `nextAttemptAt` viraria `Invalid Date` e travaria a linha para sempre.
+- **Lease de D-009:** `isClaimed` distingue lease em vigor de lease vencido, e o teste do vencido é o cenário obrigatório de RF-24 — a instância morreu depois do commit e outra precisa poder assumir. `isDue` ignora o lease de propósito: a disputa é do `SKIP LOCKED` do banco em E-10, não de uma instância em memória.
+- **EL-01 provada, não afirmada:** o payload de cada um dos quatro eventos sobrevive a `JSON.stringify` — um `Money` no `data` faria a serialização lançar por causa do `bigint` privado, que é como EL-01 vazaria sem ninguém ver. Um teste varre todo campo monetário do `data` e exige `MoneyProps` com string de exatamente 2 casas. `bun run lint` roda a guarda de E-01 sobre os oito arquivos novos.
+- **EL-05:** `InboxMessage` é registro persistente por `(consumerName, messageId)`, sem id próprio e sem estrutura em memória — a unicidade é o `UNIQUE` de E-05 (RI-09), e um teste fixa que a mesma mensagem em consumidores diferentes são dois registros legítimos.
+- **EL-06:** nenhum import de `@aws-sdk` entrou; `OutboxMessage` é dado, não publicação. A regra de fronteira de E-01 reprovaria.
 
 ## E-05 — Schema e migrations
 

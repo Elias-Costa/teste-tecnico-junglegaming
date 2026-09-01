@@ -24,9 +24,9 @@ Registro leve de decisões, estilo ADR. Neste projeto ele tem **três** funçõe
 
 ## Fila de decisões em aberto
 
-**Vazia.** As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito — e **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas. **Nenhuma etapa do `implementation-plan.md` está bloqueada.**
+**Vazia.** As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, e **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito. **Nenhuma etapa do `implementation-plan.md` está bloqueada.**
 
-A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); e como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila vazia não significa que não vão surgir mais.
+A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; e como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila vazia não significa que não vão surgir mais.
 
 ---
 
@@ -521,3 +521,33 @@ O desvio em relação ao esqueleto é deliberado e **precisa estar na ponta da l
 - `WalletLedgerEntry.create` recusa valor não positivo, o que fecha a porta também para quem construir lançamento sem passar pela wallet.
 - RT-02 ganha um teste explícito de que nenhuma operação recusada — saldo insuficiente, moeda divergente, valor zero, valor negativo — altera saldo, `version` ou `updatedAt`.
 - `docs/requirements.md` RF-02 e RF-04 atualizados.
+
+---
+
+## D-022 — Curva de backoff da outbox: equal jitter com política injetada (2026-09-01)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna descoberta em E-04, ao escrever `OutboxMessage.scheduleRetry`. D-008 fixou os **limites** do backoff — 10 tentativas de publicação, teto de 5 min, jitter obrigatório nos três loops — mas **não a forma da curva**: faltam o delay-base, o multiplicador e o formato do jitter. A etapa expôs junto dois impedimentos estruturais que nenhuma decisão anterior previa: a regra de fronteira de E-01 impede `src/domain/` de importar a configuração de infraestrutura, e a guarda de EL-01 bane `Math` em **todo** `src/` — portanto `Math.random()` também está fora. A entidade não tem como buscar nem os números nem a aleatoriedade sozinha.
+
+**Opções — forma da curva:**
+- **Equal jitter**: `h = min(teto, base · 2^tentativas) / 2`, `delay = h + rand·h`. Mantém um piso de espera e ainda dessincroniza instâncias.
+- **Full jitter** (o que a AWS recomenda): `delay = rand(0, min(teto, base · 2^tentativas))`. Dessincroniza melhor, mas o sorteio pode dar ~0.
+- **Decorrelated jitter**: `delay = min(teto, rand(base, delay_anterior · 3))`. Melhor sob contenção, mas depende do delay anterior.
+
+**Opções — como a política chega ao domínio:**
+- **Parâmetro da chamada**: `scheduleRetry(now, policy)`.
+- **Injetada na construção**: `enqueue`/`rehydrate` recebem a política e a entidade a guarda.
+- **Infra calcula o `nextAttemptAt`** e o domínio só incrementa.
+
+**Decisão:** **equal jitter** com `base = 1 s` e `teto = 5 min` (os números de D-008), e a política **injetada como parâmetro da chamada**, na forma `RetryPolicy { baseDelayMs, maxDelayMs, random }`.
+
+**Justificativa:** o piso é o ponto da decisão. Com full jitter o sorteio pode dar quase zero, e sob indisponibilidade prolongada do SQS as primeiras tentativas ficariam quase quentes — o oposto do que D-008 declara como intenção ao escolher "defaults conservadores". Decorrelated jitter exigiria persistir o delay anterior, ampliando o schema de E-05 por um ganho que a suíte não exercita.
+
+Sobre a injeção: passar a política na chamada é a única das três que resolve as duas restrições sem custo em outro lugar. Injetá-la na construção transformaria configuração em estado da entidade, que teria de ser costurado em todo `rehydrate` do repositório de E-06 — e um `rehydrate` que precisa de configuração deixa de ser "reconstruir o que está no banco". Deixar a infra calcular o `nextAttemptAt` tiraria do domínio justamente o cálculo que RF-06 pede que esteja nele. Como efeito colateral bem-vindo, o `random` injetado torna a curva determinística sob teste **sem** substituir o mecanismo por um relógio ou gerador falso — que é o que D-008 já exigia dos testes de RT-12 e RT-20.
+
+**Consequências:**
+- `src/domain/retry-policy.ts` define `RetryPolicy`; o módulo de configuração de retry da infraestrutura (E-10) é quem o preenche a partir do ambiente, com os defaults de D-008.
+- A curva vive no domínio; os números vivem na infraestrutura. `ARCHITECTURE.md` registra a divisão.
+- A truncagem para milissegundo inteiro é feita por subtração da parte fracionária (`x - x % 1`), exata em IEEE-754. `Math.trunc` está banido em `src/` pela guarda de EL-01 e **não deve ser liberado**: abrir exceção para tempo abriria a mesma porta para arredondamento de dinheiro no mesmo diretório.
+- O expoente é limitado antes de `2 ** n`, para que uma contagem corrompida vinda do banco não produza `Infinity` e não transforme `nextAttemptAt` em `Invalid Date` — o que travaria a linha para sempre.
+- O mesmo `RetryPolicy` serve aos outros dois loops de D-008 (consumo com DLQ, worker de referências), sem uma segunda curva para manter.
