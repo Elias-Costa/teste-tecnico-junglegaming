@@ -8,9 +8,9 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 
 ## Estado atual
 
-> **E-00 a E-04 CONCLUÍDAS** (2026-09-01). Stack validada de ponta a ponta, fundação de pé, núcleo de negócio fechado com teste e a camada de mensageria do domínio pronta.
-> `bun run check` = typecheck limpo, lint limpo, **174 unitários verdes**. `bun run check:full` = mais 2 de integração, autoprovisionados.
-> **Etapa atual: E-05 — Schema e migrations.**
+> **E-00 a E-05 CONCLUÍDAS** (2026-09-01). Stack validada de ponta a ponta, fundação de pé, núcleo de negócio fechado com teste, camada de mensageria do domínio pronta e o schema no banco com as garantias de RI-09.
+> `bun run check` = typecheck limpo, lint limpo, **174 unitários verdes**. `bun run check:full` = mais **40 de integração**, autoprovisionados.
+> **Etapa atual: E-06 — Persistência e repositórios.**
 >
 > **Achados do spike que valem para todas as etapas seguintes:**
 > - MikroORM v7 **não tem decorators** — mapeamento por `EntitySchema`. Isso torna a fronteira domínio/ORM estrutural em vez de convencional.
@@ -42,13 +42,24 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 > - **Ficou em aberto para E-10, por não ser do domínio:** se o `UPDATE` que marca `published_at` também limpa `locked_by`/`locked_until`. A entidade não limpa, para não divergir do SQL que ainda não existe.
 > - **`WagerTransactionRejected.from` recebe o `BusinessFailureCode` por parâmetro**, não lê `transaction.failureCode` — o getter é a união com os códigos de infraestrutura, e o parâmetro tipado é o que faz o compilador impor RF-25.
 >
-> **Decisões em vigor:** D-001 MikroORM **sem plano B** · D-003 `Money` sobre **`bigint` de centavos** · D-004 coluna **`numeric(19,2)`** + mapper próprio · D-007 (13 `failureCode` fechados) · D-009 (outbox por claim com lease) · D-011 infra de teste **híbrida** · D-012 auth **não implementada** · D-013 (grafo sem self-loop; `FAILED` só em erro permanente ou DLQ) · D-014 (ids UUIDv7, cursor keyset de coluna única) · D-015 (escala de entrada exatamente 2 casas) · D-016 (`currency` validada por forma `[A-Z]{3}`, sem tabela ISO) · D-017 (`equals` lança em moeda diferente) · **D-018** (`debit`/`credit` devolvem o lançamento) · **D-019** (saldo insuficiente: consulta + guarda) · **D-020** (referência ausente é payload inválido) · **D-021** (movimentação exige valor estritamente positivo) · **D-022** (backoff equal jitter, política injetada na chamada).
+> **O que E-05 deixou para as etapas seguintes:**
+> - **O schema já existe e é a fonte da verdade das invariantes.** E-06 mapeia contra tabelas prontas; qualquer coluna que o `EntitySchema` inventar não existe no banco. Nomes: `wallets`, `wager_transactions`, `wallet_ledger_entries`, `inbox_messages`, `outbox_messages`.
+> - **Ids não têm `DEFAULT` no banco (D-014).** Todo `insert` precisa trazer o `Bun.randomUUIDv7()` da camada de aplicação. Um id ausente vira `23502`, não um UUID gerado pelo banco — e isso é deliberado: `gen_random_uuid()` é v4 e quebraria o cursor de RF-10 sem ninguém ver.
+> - **`inbox_messages` tem chave primária composta** `(consumer_name, message_id)` e nenhuma coluna `id` (D-025). O mapeamento de E-06 precisa declarar PK composta.
+> - **O ledger é imutável no banco por trigger (D-023).** Qualquer `UPDATE`/`DELETE` que E-06 ou E-12 emitirem sobre `wallet_ledger_entries` — inclusive um flush do ORM tentando "atualizar" uma entidade suja — morre com `P0001`. O ledger só aceita `insert`.
+> - **A unicidade de reversão é parcial sobre `PROCESSED` (D-024).** E-12 continua responsável por rejeitar com `ALREADY_REVERSED` no caminho de negócio; a violação de unicidade é sinal de corrida perdida, não a mensagem que o provedor lê.
+> - **O lease da outbox é par-ou-nada.** O `UPDATE` de claim de E-10 escreve `locked_by` e `locked_until` juntos, e quem limpar um precisa limpar o outro — inclusive o `UPDATE` que marca `published_at`, cuja forma continua em aberto para E-10.
+> - **`numeric` volta como string do driver**, travado por teste em E-05. O mapper de E-06 recebe string e não pode assumir `number` em ponto nenhum (D-004, EL-01).
+> - **`payload` da outbox é `jsonb`** e é consultável por `->>`. O `attempts` e o `reference_attempts` têm `CHECK >= 0`.
+> - **Ficou de fora de propósito, por não ser escopo desta etapa:** nenhum comando de linha de comando para rodar migration. Hoje o `up` só acontece dentro do teste de RT-08. A etapa que sobe a aplicação (E-14/E-15) precisa expor isso, senão o avaliador não tem como aplicar o schema do zero — e o README é entregável avaliado.
+>
+> **Decisões em vigor:** D-001 MikroORM **sem plano B** · D-003 `Money` sobre **`bigint` de centavos** · D-004 coluna **`numeric(19,2)`** + mapper próprio · D-007 (13 `failureCode` fechados) · D-009 (outbox por claim com lease) · D-011 infra de teste **híbrida** · D-012 auth **não implementada** · D-013 (grafo sem self-loop; `FAILED` só em erro permanente ou DLQ) · D-014 (ids UUIDv7, cursor keyset de coluna única) · D-015 (escala de entrada exatamente 2 casas) · D-016 (`currency` validada por forma `[A-Z]{3}`, sem tabela ISO) · D-017 (`equals` lança em moeda diferente) · **D-018** (`debit`/`credit` devolvem o lançamento) · **D-019** (saldo insuficiente: consulta + guarda) · **D-020** (referência ausente é payload inválido) · **D-021** (movimentação exige valor estritamente positivo) · **D-022** (backoff equal jitter, política injetada na chamada) · **D-023** (imutabilidade do ledger por trigger) · **D-024** (unicidade de reversão parcial sobre `PROCESSED`) · **D-025** (PK composta na inbox; alcance de D-014 corrigido).
 >
 > Também decidido: D-002 (pessimistic `FOR UPDATE` por wallet) · D-005 (SHA-256 sobre lista fechada de 10 campos) · D-006 (`400`/`409`/`422`/`202`/`503`) · D-008 (defaults conservadores e configuráveis por ambiente).
 >
 > D-010 (`prom-client` em `GET /metrics`).
 >
-> **Fila de decisões vazia — nenhuma etapa bloqueada.** As 15 decisões que o enunciado delegava estão fechadas e registradas, mais D-016 e D-017 (expostas por E-02), D-018 a D-021 (expostas por E-03) e D-022 (exposta por E-04), todas fechadas pelo mantenedor antes de o código ser escrito. Se a implementação expuser uma decisão não prevista, ela **para a etapa** e vai para `docs/decisions.md` (`AGENTS.md` §0).
+> **Fila de decisões vazia — nenhuma etapa bloqueada.** As 15 decisões que o enunciado delegava estão fechadas e registradas, mais D-016 e D-017 (expostas por E-02), D-018 a D-021 (expostas por E-03), D-022 (exposta por E-04) e D-023 a D-025 (expostas por E-05), todas fechadas pelo mantenedor antes de o código ser escrito. Se a implementação expuser uma decisão não prevista, ela **para a etapa** e vai para `docs/decisions.md` (`AGENTS.md` §0).
 
 ---
 
@@ -60,7 +71,7 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 4. **Não escreva API de biblioteca de memória.** `AGENTS.md` §2.1. Confira a versão em `package.json` e consulte a doc oficial daquela versão.
 5. **Decisão em aberto = parar.** Se a etapa depende de um `[DECISÃO: D-XXX]` não resolvido, pare e pergunte.
 6. **Bloqueio externo = parar.** Container que não sobe, porta ocupada, imagem que não baixa. Nunca criar mock para destravar (EL-08).
-7. **Ao concluir:** rodar o check, colar a saída, marcar o checkbox, atualizar o "Estado atual", citar os RF/RN atendidos e sugerir a mensagem de commit.
+7. **Ao concluir:** rodar o check, colar a saída, marcar o checkbox, atualizar o "Estado atual", citar os RF/RN atendidos e sugerir os commits da etapa — uma mudança ou várias, conforme os três testes de `AGENTS.md` §5.1.
 
 ---
 
@@ -174,22 +185,32 @@ Não é arquitetura. É descobrir, na hora 2 e não na hora 40, se a stack fecha
 
 **Ler antes:** RI-09, RNF-09, RT-08, EL-02, EL-03, EL-07; D-004.
 **Escopo — as garantias vão para o schema, não para o código (RI-09):**
-- [ ] Colunas monetárias como `numeric(19,2)` para valor + `varchar(3)` para moeda, em wallets e no ledger (D-004).
-- [ ] Colunas `reference_attempts` e `next_reference_attempt_at` na tabela de transações (D-013) — o contador de retry vive fora do status.
-- [ ] `UNIQUE (player_id, currency)` em wallets.
-- [ ] `CHECK (balance >= 0)` em wallets.
-- [ ] `UNIQUE (idempotency_key)` em transações.
-- [ ] `UNIQUE (provider_id, external_transaction_id)` em transações.
-- [ ] Unicidade que impede reverter a mesma referência duas vezes pelo mesmo tipo (RN-09).
-- [ ] `UNIQUE (consumer_name, message_id)` na inbox.
-- [ ] Imutabilidade do ledger imposta no banco (revogar `UPDATE`/`DELETE` ou trigger que rejeita).
-- [ ] **UUIDv7 como padrão de id em todas as tabelas** (D-014), não só no ledger.
-- [ ] Colunas `locked_by` e `locked_until` na outbox, além de `attempts`, `next_attempt_at` e `published_at` (D-009).
-- [ ] Índice `(wallet_id, id)` no ledger para a paginação keyset de RF-10 (D-014).
-- [ ] Índice **parcial** `WHERE published_at IS NULL` sobre `(next_attempt_at, locked_until)` na outbox — é o caminho quente do worker (D-009).
-- [ ] Todo `up` com `down` que funciona.
+- [x] Colunas monetárias como `numeric(19,2)` para valor + `varchar(3)` para moeda, em wallets e no ledger (D-004). — também em `wager_transactions`, mais `CHECK` de forma `^[A-Z]{3}$` na moeda, alinhado a D-016.
+- [x] Colunas `reference_attempts` e `next_reference_attempt_at` na tabela de transações (D-013) — o contador de retry vive fora do status.
+- [x] `UNIQUE (player_id, currency)` em wallets.
+- [x] `CHECK (balance >= 0)` em wallets.
+- [x] `UNIQUE (idempotency_key)` em transações.
+- [x] `UNIQUE (provider_id, external_transaction_id)` em transações.
+- [x] Unicidade que impede reverter a mesma referência duas vezes pelo mesmo tipo (RN-09). — índice **parcial** sobre `PROCESSED` (D-024).
+- [x] `UNIQUE (consumer_name, message_id)` na inbox. — é a **chave primária** da tabela (D-025); a inbox não tem id próprio.
+- [x] Imutabilidade do ledger imposta no banco (revogar `UPDATE`/`DELETE` ou trigger que rejeita). — **trigger** (D-023): `REVOKE` seria ignorado pelo superusuário do container e a prova de EL-07 passaria por engano.
+- [x] **UUIDv7 como padrão de id em todas as tabelas** (D-014), não só no ledger. — `uuid` **sem `DEFAULT`**: o id é injetado pela aplicação, e `gen_random_uuid()` produz v4, que quebraria o cursor de RF-10 em silêncio.
+- [x] Colunas `locked_by` e `locked_until` na outbox, além de `attempts`, `next_attempt_at` e `published_at` (D-009). — mais `CHECK` de lease par-ou-nada: metade preenchida seria linha reivindicada sem prazo, presa para sempre.
+- [x] Índice `(wallet_id, id)` no ledger para a paginação keyset de RF-10 (D-014).
+- [x] Índice **parcial** `WHERE published_at IS NULL` sobre `(next_attempt_at, locked_until)` na outbox — é o caminho quente do worker (D-009).
+- [x] Todo `up` com `down` que funciona.
+- [x] **Três decisões novas, expostas pela etapa e fechadas antes do código:** D-023 (mecanismo de imutabilidade do ledger), D-024 (alcance da unicidade de RN-09) e D-025 (chave primária da inbox, que era uma **divergência entre dois documentos já registrados** — D-014 e a nota de E-04). Não estavam previstas no escopo original desta etapa.
 
-**Critério de conclusão:** RT-08 verde, incluindo um teste que tenta violar **cada** constraint e recebe erro do banco.
+**Critério de conclusão — atendido:**
+- `bun run check` passa: `tsc --noEmit` limpo, `eslint .` limpo, **174 testes unitários verdes** (a etapa não acrescenta unitário — o que ela cria é schema, e schema só se prova contra o banco). `bun run check:full` roda mais **40 de integração**, autoprovisionados pelo Testcontainers.
+- **Critério literal da etapa:** cada constraint tem um teste que tenta violá-la e recebe erro do banco — 38 testes em `tests/integration/schema-constraints.test.ts`. As asserções são sobre **SQLSTATE e nome da constraint**, nunca sobre a mensagem: mensagem do PostgreSQL é texto livre e muda entre versões menores, e sem o nome um `23505` qualquer passaria por prova de outra unicidade.
+- **EL-02 provada, não afirmada:** `CHECK (balance >= 0)` recusa tanto o `insert` quanto o `update` — e é o `update` que importa, porque é o caminho da race de RNF-03. O teste confirma que o saldo fica intacto depois da recusa.
+- **EL-03/EL-04:** as duas unicidades de transação recusam do banco, sem nenhuma estrutura em processo participando da decisão (RI-02).
+- **EL-05:** a mesma `(consumer_name, message_id)` é recusada pela PK, e a mesma `message_id` em consumidores diferentes é aceita — o caso que uma chave global colapsaria em silêncio.
+- **EL-07:** `UPDATE` e `DELETE` sobre um lançamento existente recebem `P0001` da trigger, e o teste confere depois que a linha continua intacta.
+- **EL-01 na borda do driver:** um teste afirma que `numeric` volta como **string**, não `number`. É a guarda que D-004 pediu, aqui contra o driver cru — antes de existir mapeamento. O teste do mapper continua sendo de E-06.
+- **RNF-09:** `down({ to: 0 })` derruba o schema inteiro e um `up()` seguinte reconstrói, com uma constraint de amostra voltando a valer. O teste também verifica que a **função** da trigger não ficou órfã — ela sobrevive ao `drop table`, e um `down` incompleto só quebraria na execução seguinte.
+- **Duas correções que a execução expôs**, nenhuma delas de memória: os placeholders do MikroORM são `?`, não `$1`; e o PostgreSQL avalia `CHECK` em ordem alfabética de nome, então o `CHECK` de aritmética do ledger foi reescrito com `case ... else true` para não reportar "balanced" num erro que é de direção. Constraint que aponta a regra errada é pior que constraint nenhuma.
 
 ## E-06 — Persistência e repositórios
 

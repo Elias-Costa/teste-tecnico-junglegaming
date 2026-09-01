@@ -122,10 +122,24 @@ Se não for possível confirmar a API, **diga isso** em vez de gerar código pla
 4. Rodar `bun run check` (e `bun run check:full` quando a etapa tocar banco ou fila) e **colar a saída na resposta**. Afirmar que passou não é evidência; a saída é.
 5. Atualizar a documentação afetada e registrar decisões novas em `docs/decisions.md`.
 6. Marcar o checkbox da etapa e atualizar o "Estado atual" em `docs/implementation-plan.md`.
-7. Ao concluir, **citar quais RF-XX/RN-XX foram atendidos** e sugerir mensagem de commit de uma linha no formato `tipo: descrição curta`.
+7. Ao concluir, **citar quais RF-XX/RN-XX foram atendidos** e sugerir os commits da etapa (ver abaixo), cada mensagem de uma linha no formato `tipo: descrição curta`.
 8. Se a tarefa expõe uma lacuna nos documentos, sinalizar explicitamente — não seguir em frente.
 
 **O agente não cria branches nem faz commits.** Quem commita é o mantenedor, depois de ler o diff. Isso é intencional: ler o diff é como o mantenedor mantém domínio sobre o que entra no repositório.
+
+### 5.1 Granularidade de commit
+
+A etapa é a unidade de **trabalho**; o commit é a unidade de **mudança**. Quase sempre coincidem — o roteiro foi desenhado com escopo fechado —, mas não por definição.
+
+Ao concluir, o agente diz explicitamente se a etapa é **uma** mudança ou **várias**, aplicando três testes:
+
+- **A mensagem precisa de "e"?** Assunto que não cabe numa oração sem conjunção são dois assuntos.
+- **O revert leva refém?** Se desfazer uma parte apaga trabalho não relacionado, são commits distintos.
+- **Cada metade fica verde sozinha?** Se não fica, é **uma** mudança — split que produz commit quebrado é pior que commit grande.
+
+Quando forem várias, apontar a costura, dar a ordem (a dependência de import manda) e confirmar que cada lado passa `bun run check` isoladamente. Quando for uma, dizer isso e sugerir um commit só.
+
+**Fatiar mudança atômica para o histórico parecer arrumado é pior que não fatiar:** espalha um raciocínio único por vários diffs e obriga quem lê a remontá-lo. A decisão final é sempre do mantenedor, na leitura do diff.
 
 ---
 

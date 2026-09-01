@@ -24,9 +24,9 @@ Registro leve de decisões, estilo ADR. Neste projeto ele tem **três** funçõe
 
 ## Fila de decisões em aberto
 
-**Vazia.** As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, e **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito. **Nenhuma etapa do `implementation-plan.md` está bloqueada.**
+**Vazia.** As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, e **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita. **Nenhuma etapa do `implementation-plan.md` está bloqueada.**
 
-A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; e como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila vazia não significa que não vão surgir mais.
+A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022); e como aconteceu em E-05, onde o próprio escopo da etapa registrava duas vias sem escolher entre elas (D-023) e onde **dois documentos já registrados divergiam** sobre a chave da inbox (D-025) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila vazia não significa que não vão surgir mais.
 
 ---
 
@@ -183,7 +183,7 @@ O custo aceito é entrega **at-least-once**: crash depois do publish e antes de 
 **Justificativa:** UUIDv7 é ordenável no tempo por construção, então um índice de coluna única entrega ordem cronológica **e** ordem total ao mesmo tempo. O par `(created_at, id)` daria o mesmo resultado com índice composto, cursor maior e duas partes para validar na decodificação — complexidade sem ganho. O cursor versionado resolveria um problema de evolução de contrato que ninguém vai exercer durante a avaliação.
 
 **Consequências:**
-- **UUIDv7 passa a ser o padrão de id em todas as tabelas**, não só no ledger. Esta decisão extrapola RF-10 e precisa valer em E-05 inteira.
+- **UUIDv7 passa a ser o padrão de id em todas as tabelas**, não só no ledger. Esta decisão extrapola RF-10 e precisa valer em E-05 inteira. **Alcance corrigido por D-025:** vale para as tabelas com id sintético; `inbox_messages` tem chave primária composta e é a única exceção.
 - **Resolvido no spike E-00: `Bun.randomUUIDv7()` é nativo.** Nenhuma biblioteca de UUID entra no projeto. `crypto.randomUUID()` continua gerando v4 e **não deve ser usado** para id de entidade — a ordenação do cursor de RF-10 depende do v7.
 - Índice `(wallet_id, id)` no ledger, que é o acesso de RF-10.
 - O cursor é validado na decodificação: precisa resultar em UUID bem formado antes de entrar na query.
@@ -551,3 +551,73 @@ Sobre a injeção: passar a política na chamada é a única das três que resol
 - A truncagem para milissegundo inteiro é feita por subtração da parte fracionária (`x - x % 1`), exata em IEEE-754. `Math.trunc` está banido em `src/` pela guarda de EL-01 e **não deve ser liberado**: abrir exceção para tempo abriria a mesma porta para arredondamento de dinheiro no mesmo diretório.
 - O expoente é limitado antes de `2 ** n`, para que uma contagem corrompida vinda do banco não produza `Infinity` e não transforme `nextAttemptAt` em `Invalid Date` — o que travaria a linha para sempre.
 - O mesmo `RetryPolicy` serve aos outros dois loops de D-008 (consumo com DLQ, worker de referências), sem uma segunda curva para manter.
+
+---
+
+## D-023 — Imutabilidade do ledger: trigger que lança (2026-09-01)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna descoberta ao detalhar E-05. RI-05 proíbe sobrescrever ou excluir lançamentos, RI-09 exige que a garantia esteja **no schema** e EL-07 é eliminatória. O escopo da etapa registrava as duas vias possíveis sem escolher entre elas ("revogar `UPDATE`/`DELETE` **ou** trigger que rejeita"), e a escolha muda o que RT-08 consegue provar.
+
+**Opções:**
+- **`REVOKE UPDATE, DELETE`**: idiomático e barato, expressa a garantia no modelo de privilégios. Mas o dono da tabela e qualquer superusuário ignoram a revogação, e o usuário que o Testcontainers cria é superusuário — provar a garantia exigiria criar uma role de aplicação separada dentro da migration e reconectar o teste com ela.
+- **Trigger `BEFORE UPDATE OR DELETE` com `RAISE EXCEPTION`**: vale para qualquer role, inclusive superusuário. Custo: um objeto de banco a mais, que o `down` precisa desfazer.
+- **As duas**, defesa em profundidade.
+
+**Decisão:** **trigger que lança**, sem `REVOKE`.
+
+**Justificativa:** a garantia precisa ser **provável pela suíte**, não apenas declarada. Com `REVOKE`, o teste de RT-08 que sustenta EL-07 rodaria como superusuário e passaria por engano — um `UPDATE` bem-sucedido que ninguém veria, na exata falha eliminatória que o mecanismo deveria fechar. A trigger não depende de quem está conectado, que é a propriedade que interessa aqui.
+
+As duas juntas foram descartadas por criarem dois mecanismos para o mesmo fato, com a role extra a manter no `down` sem nada que a suíte exercite. O modelo de privilégios continua sendo o caminho certo em produção, e entra em `ARCHITECTURE.md` como recomendação de deploy — não como código desta entrega.
+
+**Consequências:**
+- A migration inicial cria a função `reject_ledger_mutation()` e a trigger `ledger_immutable` sobre `wallet_ledger_entries`; o `down` derruba as duas.
+- RT-08 tenta um `UPDATE` e um `DELETE` sobre um lançamento existente e exige erro do banco nos dois — é a prova de EL-07 no schema, complementar à imutabilidade estrutural que E-03 já garantiu no objeto.
+- **Limitação conhecida para `ARCHITECTURE.md`:** a trigger custa uma chamada por linha afetada em `UPDATE`/`DELETE`. Como nenhum caminho legítimo do sistema emite qualquer um dos dois sobre o ledger, o custo real é zero — ele só aparece no caminho que deve falhar.
+- `REVOKE UPDATE, DELETE` para a role de aplicação fica documentado como endurecimento recomendado em produção, fora do escopo desta entrega.
+
+---
+
+## D-024 — Alcance da unicidade de RN-09: índice parcial sobre `PROCESSED` (2026-09-01)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna descoberta ao detalhar E-05. RN-09 exige que uma referência não seja revertida duas vezes pelo mesmo tipo de operação, e RI-09 manda a garantia para o banco. O que não estava registrado é **quais linhas** o índice cobre: toda transação com referência resolvida, ou só as que efetivamente reverteram.
+
+**Opções:**
+- **Índice total** sobre `(reference_transaction_id, kind)` para toda linha com referência resolvida: garantia mais forte e mais simples de explicar, mas a primeira tentativa **rejeitada** queima a referência para sempre — a segunda submissão morre com erro de banco antes de ser avaliada pela regra de negócio.
+- **Índice parcial** sobre as linhas `PROCESSED`: conta apenas reversões efetivas.
+
+**Decisão:** **índice parcial**, `WHERE status = 'PROCESSED' AND reference_transaction_id IS NOT NULL`.
+
+**Justificativa:** RN-09 fala em **reverter** duas vezes, e uma transação `REJECTED` não reverteu nada — RN-11 é explícita em que ela não altera saldo nem gera ledger. O caso que decide é o de RN-16: um `REFUND` recusado por saldo insuficiente na reversão é uma situação operacional recuperável, e com o índice total ela viraria um bloqueio permanente daquela referência, expresso como erro de integridade em vez de `failureCode` — o oposto do que RN-17 pede da taxonomia.
+
+O índice parcial ainda fecha a corrida real: duas reversões concorrentes da mesma referência disputam a escrita do status `PROCESSED`, e a segunda recebe violação de unicidade. A serialização por wallet de D-002 já as ordena; o índice é a garantia que não depende de o lock estar correto.
+
+**Consequências:**
+- `CREATE UNIQUE INDEX ... ON wager_transactions (reference_transaction_id, kind) WHERE status = 'PROCESSED' AND reference_transaction_id IS NOT NULL` na migration inicial.
+- Linhas `PENDING` e `PENDING_REFERENCE` ficam fora do índice, o que é necessário: a referência de uma `PENDING_REFERENCE` ainda **não** foi resolvida (RF-26) e a coluna é nula.
+- E-12 continua responsável por rejeitar com `ALREADY_REVERSED` (D-007) no caminho de negócio. O índice é a rede embaixo, não o caminho — a violação de unicidade é o sinal de corrida perdida, não a mensagem que o provedor lê.
+- RT-08 exercita o índice nas duas direções: duas reversões `PROCESSED` da mesma referência e kind são recusadas pelo banco; uma tentativa `REJECTED` seguida de uma `PROCESSED` é aceita.
+
+---
+
+## D-025 — Chave primária da inbox: par `(consumer_name, message_id)` (2026-09-01)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna descoberta ao detalhar E-05, na forma de uma divergência entre dois textos já registrados. D-014 estendeu o UUIDv7 a "todas as tabelas"; E-04 modelou `InboxMessage` **sem id próprio**, declarando que a identidade é o par `(consumerName, messageId)`. Os dois não fecham para esta tabela.
+
+**Opções:**
+- **PK composta** `(consumer_name, message_id)`: a unicidade de RF-19/EL-05 passa a ser a própria chave primária.
+- **`id uuid` sintético + `UNIQUE (consumer_name, message_id)`**: mantém D-014 literal, ao custo de um id que a entidade não tem, não recebe e não usa.
+
+**Decisão:** **PK composta**. D-014 passa a ser lida como "toda tabela **com id sintético** usa UUIDv7".
+
+**Justificativa:** o id sintético existiria só para satisfazer a leitura literal de uma decisão cujo objetivo era outro — D-014 resolve o **cursor de RF-10**, e a inbox não é paginada por cursor nem aparece em nenhuma API. Pior, obrigaria E-06 a gerar em `rehydrate` um valor que o domínio desconhece, o que quebra a premissa de que `rehydrate` reconstrói o que está no banco e nada mais.
+
+A PK composta também põe a garantia de EL-05 no lugar mais visível do schema: a chave primária da tabela **é** a regra de deduplicação, e não uma constraint paralela que alguém poderia remover achando que é índice redundante.
+
+**Consequências:**
+- `inbox_messages` sem coluna `id`; `PRIMARY KEY (consumer_name, message_id)`.
+- **D-014 fica com o alcance corrigido**: UUIDv7 é o padrão de id nas tabelas que têm id sintético — `wallets`, `wager_transactions`, `wallet_ledger_entries` e `outbox_messages`. A inbox é a exceção registrada, e é a única.
+- E-06 mapeia `InboxMessage` com chave primária composta; nenhum id é gerado para ela.
+- RT-08 prova a dedupe inserindo o mesmo par duas vezes e recebendo erro do banco, e prova que o **mesmo `message_id` em consumidores diferentes** é aceito — que é o caso que uma chave global colapsaria em silêncio.
