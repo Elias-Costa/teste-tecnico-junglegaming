@@ -34,6 +34,8 @@ Representa dinheiro de forma exata e imutável. Toda operação retorna nova ins
 - Operação entre moedas diferentes lança erro de domínio (`assertSameCurrency`).
 - Entradas rejeitadas: `NaN`, `Infinity`, notação científica, string vazia, mais de 2 casas decimais, valores negativos em contratos de entrada.
 - **Escala de entrada é exatamente 2 casas** — `[DECIDIDO: D-015]`, lacuna do enunciado resolvida. `"25"` e `"25.5"` são rejeitados, assim como zeros à esquerda (`"025.00"`). Garante representação textual única por valor, o que impede conflito falso de `payloadHash` (RF-14).
+- **`currency` é validada por forma, não por tabela** — `[DECIDIDO: D-016]`, lacuna do enunciado resolvida. `from()` e `zero()` exigem exatamente três letras maiúsculas (`^[A-Z]{3}$`); `"brl"`, `"BR"`, `"BRLX"` e `""` são rejeitados. Mesmo argumento de canonicidade de D-015: uma representação textual por moeda. A existência do código na ISO-4217 **não** é verificada (limitação conhecida).
+- **`equals` também lança em moeda diferente** — `[DECIDIDO: D-017]`. `assertSameCurrency` vale para as quatro operações binárias: `add`, `subtract`, `isLessThan` e `equals`.
 - **Não depende de tipos monetários do ORM nem de decorators do NestJS.**
 - Na persistência, valor e moeda podem ocupar colunas separadas, desde que a representação seja exata e reidratada como `Money`.
 

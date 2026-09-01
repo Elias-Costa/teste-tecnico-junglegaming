@@ -8,9 +8,9 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 
 ## Estado atual
 
-> **E-00 e E-01 CONCLUÍDAS** (2026-09-01). Stack validada de ponta a ponta e fundação de pé.
-> `bun run check` = typecheck limpo, lint limpo, 4 unitários verdes. `bun run check:full` = mais 2 de integração, autoprovisionados.
-> **Etapa atual: E-02 — Domínio: `Money`.** Primeira regra de negócio do projeto.
+> **E-00, E-01 e E-02 CONCLUÍDAS** (2026-09-01). Stack validada de ponta a ponta, fundação de pé e a primeira regra de negócio fechada com teste.
+> `bun run check` = typecheck limpo, lint limpo, **58 unitários verdes**. `bun run check:full` = mais 2 de integração, autoprovisionados.
+> **Etapa atual: E-03 — Domínio: `Wallet`, `WagerTransaction`, `WalletLedgerEntry`.**
 >
 > **Achados do spike que valem para todas as etapas seguintes:**
 > - MikroORM v7 **não tem decorators** — mapeamento por `EntitySchema`. Isso torna a fronteira domínio/ORM estrutural em vez de convencional.
@@ -18,13 +18,19 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 > - LocalStack a partir da linha 2026.x **exige token de licença**; fixado em `4.14.0`, o último community.
 > - PostgreSQL nativo do Windows ocupa a 5432 — o Compose publica em **55432**.
 >
-> **Decisões em vigor:** D-001 MikroORM **sem plano B** · D-003 `Money` sobre **`bigint` de centavos** · D-004 coluna **`numeric(19,2)`** + mapper próprio · D-007 (13 `failureCode` fechados) · D-009 (outbox por claim com lease) · D-011 infra de teste **híbrida** · D-012 auth **não implementada** · D-013 (grafo sem self-loop; `FAILED` só em erro permanente ou DLQ) · D-014 (ids UUIDv7, cursor keyset de coluna única) · D-015 (escala de entrada exatamente 2 casas).
+> **O que E-02 deixou para as etapas seguintes:**
+> - `Money` é o único caminho de dinheiro no domínio: `from()` (contrato de entrada, valida) e construtor privado (aritmética e `negate`, não revalida). Nada além disso constrói valor monetário.
+> - As quatro operações binárias — `add`, `subtract`, `isLessThan`, `equals` — lançam `CurrencyMismatchError` entre moedas diferentes (D-017). O check de moeda precisa vir **antes** do de valor nas regras de RN-10.
+> - `InvalidMoneyError` cobre valor e moeda malformados; D-006 mapeia os dois para `400`.
+> - A guarda de lint de EL-01 foi reverificada com sonda: dispara em `src/domain/`.
+>
+> **Decisões em vigor:** D-001 MikroORM **sem plano B** · D-003 `Money` sobre **`bigint` de centavos** · D-004 coluna **`numeric(19,2)`** + mapper próprio · D-007 (13 `failureCode` fechados) · D-009 (outbox por claim com lease) · D-011 infra de teste **híbrida** · D-012 auth **não implementada** · D-013 (grafo sem self-loop; `FAILED` só em erro permanente ou DLQ) · D-014 (ids UUIDv7, cursor keyset de coluna única) · D-015 (escala de entrada exatamente 2 casas) · **D-016** (`currency` validada por forma `[A-Z]{3}`, sem tabela ISO) · **D-017** (`equals` lança em moeda diferente).
 >
 > Também decidido: D-002 (pessimistic `FOR UPDATE` por wallet) · D-005 (SHA-256 sobre lista fechada de 10 campos) · D-006 (`400`/`409`/`422`/`202`/`503`) · D-008 (defaults conservadores e configuráveis por ambiente).
 >
 > D-010 (`prom-client` em `GET /metrics`).
 >
-> **Fila de decisões vazia — nenhuma etapa bloqueada.** As 15 decisões que o enunciado delegava estão fechadas e registradas. Se a implementação expuser uma decisão não prevista, ela **para a etapa** e vai para `docs/decisions.md` (`AGENTS.md` §0).
+> **Fila de decisões vazia — nenhuma etapa bloqueada.** As 15 decisões que o enunciado delegava estão fechadas e registradas, mais D-016 e D-017, que E-02 expôs e o mantenedor fechou antes de o código ser escrito. Se a implementação expuser uma decisão não prevista, ela **para a etapa** e vai para `docs/decisions.md` (`AGENTS.md` §0).
 
 ---
 
@@ -86,18 +92,24 @@ Não é arquitetura. É descobrir, na hora 2 e não na hora 40, se a stack fecha
 
 ## E-02 — Domínio: `Money`
 
-**Ler antes:** RF-01, RI-01, EL-01, RT-01; D-003, D-004.
+**Ler antes:** RF-01, RI-01, EL-01, RT-01; D-003, D-004, D-015, D-016, D-017.
 **Escopo:**
-- [ ] Value object imutável sobre `bigint` de centavos, com factories, operações, comparações e serialização (RF-01, D-003). **Zero dependência externa para dinheiro.**
-- [ ] Escala 2 numa constante única (`SCALE_FACTOR = 100n`), com comentário citando §6.1 do enunciado como origem da premissa.
-- [ ] **Parse por regex é a única porta de entrada.** `Money.from()` exige **exatamente 2 casas decimais, sem zeros à esquerda, no máximo 17 dígitos inteiros** (D-015) e só então monta o `bigint`. `BigInt("25.00")` lança, então não existe caminho preguiçoso que aceite entrada inválida por acidente (D-003).
-- [ ] **`negate()` não passa por `from()`** — RF-01 rejeita negativos em contratos de entrada, mas `negate()` precisa produzir `Money` negativo para o lançamento invertido do `ROLLBACK` (RN-05). Constrói pelo construtor privado, sem revalidar.
-- [ ] **Formatação sem `Number` em ponto nenhum**: divisão e resto sobre `bigint` + `padStart(2, "0")`. Um `Number(bigint)` no caminho converteria para float em silêncio (EL-01).
-- [ ] O `bigint` nunca sai do domínio: `toJSON()` devolve `MoneyProps` com string, e um teste garante que `JSON.stringify(money)` não lança.
-- [ ] Erro de domínio para conflito de moeda.
-- [ ] Testes unitários RT-01 e RT-04.
+- [x] Value object imutável sobre `bigint` de centavos, com factories, operações, comparações e serialização (RF-01, D-003). **Zero dependência externa para dinheiro.** — `src/domain/money.ts`.
+- [x] Escala 2 numa constante única (`SCALE_FACTOR = 100n`), com comentário citando §6.1 do enunciado como origem da premissa.
+- [x] **Parse por regex é a única porta de entrada.** `Money.from()` exige exatamente 2 casas decimais, sem zeros à esquerda, no máximo 17 dígitos inteiros (D-015) e só então monta o `bigint`.
+- [x] **`negate()` não passa por `from()`** — constrói pelo construtor privado, sem revalidar, para o lançamento invertido do `ROLLBACK` (RN-05). Mesma justificativa se aplica a `add` e `subtract`: aritmética exata pode dar negativo legítimo.
+- [x] **Formatação sem `Number` em ponto nenhum**: divisão e resto sobre `bigint`, sinal por comparação (`< 0n`, não `Math.abs`) e `padStart(2, "0")`.
+- [x] O `bigint` nunca sai do domínio: `toJSON()` devolve `MoneyProps` com string, e um teste garante que `JSON.stringify(money)` não lança.
+- [x] Erro de domínio para conflito de moeda. — `CurrencyMismatchError`, carregando as duas moedas; mais `InvalidMoneyError` para entrada rejeitada, um tipo só para valor e moeda porque D-006 mapeia ambos para `400`.
+- [x] Testes unitários RT-01 e RT-04. — 54 testes em `tests/unit/money.test.ts`.
+- [x] **Duas decisões novas, expostas pela etapa e fechadas antes do código:** D-016 (validação de `currency` por forma `[A-Z]{3}`) e D-017 (`equals` lança em moeda diferente). Não estavam previstas no escopo original desta etapa.
 
-**Critério de conclusão:** RT-01 e RT-04 verdes, com RT-01 cobrindo explicitamente `"NaN"`, `"Infinity"`, `"2.5e1"`, `""`, `"1.005"`, `"-5.00"`, `"25"`, `"25.5"` e `"025.00"` como entradas rejeitadas em `from()`, mais o caso de `negate()` produzindo negativo válido. Zero import de ORM, NestJS ou biblioteca decimal no arquivo.
+**Critério de conclusão — atendido:**
+- `bun run check` passa: `tsc --noEmit` limpo, `eslint .` limpo, **58 testes unitários verdes** (4 de E-01 + 54 de `Money`).
+- RT-01 cobre `"NaN"`, `"Infinity"`, `"2.5e1"`, `""`, `"1.005"`, `"-5.00"`, `"25"`, `"25.5"` e `"025.00"` como rejeitados em `from()`, mais `.50`, `1.`, `+1.00`, `1,00`, `0x19`, espaço nas pontas e 18 dígitos inteiros (o teto de `numeric(19,2)` é 17), e `negate()` produzindo negativo válido.
+- RT-04 exercita as quatro operações binárias entre `BRL` e `USD`, mais o caso simétrico de não lançar dentro da mesma moeda.
+- Zero import de ORM, NestJS ou biblioteca decimal no arquivo — a regra de fronteira de E-01 vale sobre ele.
+- **EL-01 provada, não afirmada:** uma sonda com `Number(1n)`, `.toFixed()`, `Math.round()` e `parseFloat()` em `src/domain/` produziu 4 erros de lint, um por violação; a sonda foi removida depois da verificação. Do lado do teste, `"0.10" + "0.20"` dá exatamente `"0.30"` e `"99999999999999.99" + "0.01"` atravessa 2^53 centavos sem perda.
 
 ## E-03 — Domínio: `Wallet`, `WagerTransaction`, `WalletLedgerEntry`
 

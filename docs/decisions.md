@@ -24,9 +24,9 @@ Registro leve de decisões, estilo ADR. Neste projeto ele tem **três** funçõe
 
 ## Fila de decisões em aberto
 
-**Vazia.** Todas as 15 decisões que o enunciado delegava ao candidato estão resolvidas e registradas abaixo, fechadas em 2026-09-01, antes de existir código de produção. **Nenhuma etapa do `implementation-plan.md` está bloqueada.**
+**Vazia.** As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção, e a elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito. **Nenhuma etapa do `implementation-plan.md` está bloqueada.**
 
-A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila vazia não significa que não vão surgir mais.
+A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão, e como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila vazia não significa que não vão surgir mais.
 
 ---
 
@@ -270,6 +270,50 @@ FAILED             → (terminal)
 - Regex de `Money.from()`: exatamente 2 decimais, **sem zeros à esquerda** na parte inteira, no máximo 17 dígitos inteiros (o que `numeric(19,2)` de D-004 comporta). Zeros à esquerda caem pelo mesmo argumento de canonicidade: `"025.00"` e `"25.00"` não podem coexistir sob uma mesma idempotency key.
 - RT-01 passa a cobrir `"25"`, `"25.5"` e `"025.00"` como rejeitados, além dos casos já listados.
 - `docs/requirements.md` RF-01: a marcação `[INTERPRETAÇÃO]` vira regra.
+
+---
+
+## D-016 — Validação de `currency` em `Money`: forma `[A-Z]{3}` (2026-09-01)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna descoberta em E-02, ao escrever as factories de `Money`. RF-01 diz que `currency` é ISO-4217 e D-015 fechou a escala do `amount`, mas nada dizia o que `from()` e `zero()` fazem com `"brl"`, `"BR"`, `"BRLX"` ou `""`.
+
+**Opções:**
+- **Rejeitar o que não casar `[A-Z]{3}`** — validação de forma, sem tabela.
+- **Normalizar para maiúscula** — aceita `"brl"` e guarda `"BRL"`.
+- **Não validar em E-02** — `currency` como string opaca no domínio, validação só no DTO da API (E-08).
+
+**Decisão:** **rejeitar tudo que não casar `^[A-Z]{3}$`**, com erro de domínio. Sem tabela ISO-4217: a validação é de **forma**, não de existência do código.
+
+**Justificativa:** é o argumento de D-015 aplicado à outra metade do `MoneyProps` — **uma representação textual por valor**. Se `"brl"` e `"BRL"` coexistissem, dois efeitos ruins e difíceis de enxergar apareceriam: o `payloadHash` de D-005 divergiria para o mesmo dinheiro, transformando reenvio legítimo em `IDEMPOTENCY_CONFLICT` falso; e a comparação de moeda contra a wallet produziria `CURRENCY_MISMATCH` falso. Normalizar resolveria o primeiro, mas ao custo de o payload guardado não ser mais o payload que chegou — e D-005 calcula o hash sobre o que chegou. Não validar deixaria o domínio aceitar `""` como moeda, que é exatamente o tipo de entrada que RF-01 manda rejeitar.
+
+A tabela ISO-4217 completa foi descartada: é escopo que ninguém pediu, tem manutenção própria (a lista muda) e ganho marginal — a §6.1 do enunciado autoriza assumir moeda única `BRL`, desde que o modelo continue multi-moeda.
+
+**Consequências:**
+- `CURRENCY_PATTERN = /^[A-Z]{3}$/` em `src/domain/money.ts`, aplicado por `from()` **e** por `zero()`.
+- RT-01 cobre `"brl"`, `"BR"`, `"BRLX"`, `""` e `" BRL"` como rejeitados nas duas factories.
+- A ausência de validação de existência do código ISO vira **limitação conhecida** em `ARCHITECTURE.md` (E-17), junto da escala 2 global de D-003.
+- `docs/requirements.md` RF-01 atualizado.
+
+---
+
+## D-017 — `equals()` entre moedas diferentes: lança (2026-09-01)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna descoberta em E-02. RF-01 lista `equals` entre as **consultas** (`isZero`, `isPositive`, `isNegative`, `isLessThan`, `equals`) e, separadamente, diz que "operação entre moedas diferentes lança erro de domínio". A taxonomia não decide o caso: `isLessThan` também é consulta e precisa lançar, porque é o teste de saldo insuficiente — resposta silenciosa errada ali é vizinha de EL-02.
+
+**Opções:**
+- **Lançar `CurrencyMismatchError`**, como `add` e `subtract`.
+- **Retornar `false`** — igualdade total, convenção usual de JS: moedas diferentes nunca são o mesmo dinheiro.
+
+**Decisão:** **lançar.** Toda operação binária de `Money` entre moedas diferentes passa por `assertSameCurrency` — `add`, `subtract`, `isLessThan` e `equals`.
+
+**Justificativa:** uma regra só, explicável numa frase: *comparar BRL com USD é erro de programação, não resposta*. A alternativa é defensável em abstrato, mas aqui tem custo concreto: com `false`, um bug cross-currency em RN-10 (a reversão precisa ter valor igual ao original) sairia como `AMOUNT_MISMATCH` — um `failureCode` errado e plausível o bastante para ninguém investigar. Lançar exige que o check de moeda venha antes do check de valor, que é a ordem que as regras de negócio já têm.
+
+**Consequências:**
+- `assertSameCurrency` em `add`, `subtract`, `isLessThan` e `equals`. `negate`, `isZero`, `isPositive` e `isNegative` são unários e não se aplicam.
+- RT-04 exercita os quatro métodos entre `BRL` e `USD`.
+- `docs/requirements.md` RF-01 atualizado.
 
 ---
 
