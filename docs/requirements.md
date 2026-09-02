@@ -94,8 +94,11 @@ Fila persistente de eventos de integração pendentes de publicação.
 Cria wallet para `playerId` + `initialBalance`.
 *Aceite:*
 - Saldo inicial maior que zero gera transação interna `OPENING` **na mesma transação SQL**, com lançamento `CREDIT` correspondente.
-- Resposta: `{ id, playerId, balance, version }` com `version: 1`.
+- Resposta: `{ id, playerId, balance, version }` com `version: 1`. Status `201`.
 - Wallet duplicada para o mesmo `playerId` + `currency` falha como **conflito**.
+- **A `OPENING` interna usa sentinelas nas seis colunas NOT NULL que a abertura não tem** — `[DECIDIDO: D-033]`, lacuna exposta por E-08: `provider_id`, `external_transaction_id`, `idempotency_key`, `payload_hash`, `round_id` e `game_id` são NOT NULL no schema de E-05 e não têm valor natural aqui. `providerId = "internal"` (identificador reservado), `externalTransactionId = walletId`, `idempotencyKey = "opening:{walletId}"`.
+- **A abertura publica os dois eventos** — `[DECIDIDO: D-034]`. `WagerTransactionProcessed` (a `OPENING` é transação aplicada) e `WalletBalanceChanged` (o saldo mudou), pela letra de RF-25. Saldo inicial zero não gera transação, lançamento nem evento.
+- **A duplicata é traduzida no repositório** — `[DECIDIDO: D-035]`. `uq_wallets_player_currency` continua sendo a garantia (RI-09); o repositório converte a exceção do ORM em `WalletAlreadyExistsError`, que D-006 mapeia para `409`. **Sem `failureCode`**: os 13 códigos de D-007 estão fechados e nenhum descreve "wallet já existe".
 
 **RF-09 — `GET /wallets/:walletId`** — retorna estado atual da wallet.
 
@@ -111,8 +114,10 @@ Submete uma operação de aposta.
 *Aceite:*
 - Header `Idempotency-Key` **obrigatório**; ausência é erro de payload inválido.
 - Body: `providerId`, `externalTransactionId`, `playerId`, `walletId`, `roundId`, `gameId`, `kind`, `money`.
-- Resposta: `{ transactionId, status, balance, idempotentReplay }`.
-- `kind: "OPENING"` submetido pela API é **rejeitado** (RN-13).
+- Resposta: `{ transactionId, status, balance, idempotentReplay }`, com `failureCode` quando há. Status `200` para aplicada — não `201`, porque um replay não cria nada (RN-12).
+- `kind: "OPENING"` submetido pela API é **rejeitado** (RN-13) com `422` e `KIND_NOT_SUBMITTABLE`. Kind **inexistente** é `400`: contrato errado, não regra de negócio.
+- **A validação de entrada é um parser artesanal, sem biblioteca** — `[DECIDIDO: D-038]`. A borda checa só forma; valor é do domínio (`Money.from`, `WagerTransaction.create`). É onde o `null` que D-005 manda rejeitar é barrado, e onde um número JSON em `money.amount` morre antes de encostar em ponto flutuante (EL-01).
+- **`correlationId` vem do header `X-Correlation-Id`, com fallback gerado** — `[DECIDIDO: D-039]`. Ecoado na resposta, inclusive nas de erro. Header malformado é substituído, não recusado: correlação é observabilidade e não derruba operação válida.
 
 **RF-14 — Idempotência da submissão**
 *Aceite:*
@@ -124,6 +129,8 @@ Submete uma operação de aposta.
 
 **RF-15 — Mapeamento de status HTTP**
 *Aceite:* a API distingue com clareza — e **de forma consistente entre todos os endpoints** — cinco situações: (a) payload inválido, (b) conflito de idempotência, (c) rejeição por regra de negócio, (d) aceite com processamento pendente, (e) falha transitória de infraestrutura. Colapsar duas delas no mesmo código é falha de requisito. `[DECIDIDO: D-006]` — `400` / `409` / `422` / `202` / `503`, aplicados por um filtro de exceção único.
+- **O desfecho de negócio chega à borda como resultado, não como exceção** — `[DECIDIDO: D-036]`, emenda a D-006. Uma função pura decide `200`/`202`/`422` a partir do resultado; o filtro decide o resto. Os dois pontos vivem no mesmo arquivo e nenhum controller decide status por conta própria. O `422` tem duas formas de corpo, ambas com `failureCode`: rejeição persistida responde o corpo de RF-13 (com `transactionId`); rejeição que não vira linha (D-031, RN-13) responde `{ failureCode, message }`.
+- **`503` é reconhecido por lista explícita de SQLSTATE; o que não é nenhuma das cinco situações é `500`** — `[DECIDIDO: D-037]`. Classe `08`, `40001`/`40P01`, classe `53`, `55P03`, `57014`, `57P01` e erros de rede sem SQLSTATE. Violação de constraint e erro de sintaxe **não** entram: reenviar não conserta bug. A mesma função classifica o consumo em RF-21 (E-11).
 
 **RF-16 — `POST /wallets/:walletId/reconciliation`**
 *Aceite:*

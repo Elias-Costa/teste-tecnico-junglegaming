@@ -8,9 +8,9 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 
 ## Estado atual
 
-> **E-00 a E-07 CONCLUÍDAS** (E-07 em 2026-09-02). Stack validada de ponta a ponta, fundação de pé, núcleo de negócio fechado com teste, camada de mensageria do domínio pronta, schema no banco com as garantias de RI-09, os cinco agregados indo e voltando do PostgreSQL real e **o caminho do dinheiro fechado numa transação SQL única, com atomicidade provada contra falha real do banco**.
-> `bun run check` = typecheck limpo, lint limpo, **197 unitários verdes**. `bun run check:full` = mais **79 de integração**, autoprovisionados.
-> **Etapa atual: E-08 — API HTTP: escrita.**
+> **E-00 a E-08 CONCLUÍDAS** (E-08 em 2026-09-02). Stack validada de ponta a ponta, fundação de pé, núcleo de negócio fechado com teste, camada de mensageria do domínio pronta, schema no banco com as garantias de RI-09, os cinco agregados indo e voltando do PostgreSQL real, o caminho do dinheiro fechado numa transação SQL única com atomicidade provada contra falha real do banco, e **os dois endpoints de escrita de pé, com as cinco situações de RF-15 em cinco códigos distintos**.
+> `bun run check` = typecheck limpo, lint limpo, **236 unitários verdes**. `bun run check:full` = mais **102 de integração**, autoprovisionados.
+> **Etapa atual: E-09 — PROVA DE CONCORRÊNCIA (meta do dia 1).**
 >
 > **Achados do spike que valem para todas as etapas seguintes:**
 > - MikroORM v7 **não tem decorators** — mapeamento por `EntitySchema`. Isso torna a fronteira domínio/ORM estrutural em vez de convencional.
@@ -73,7 +73,19 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 > - **`UnsupportedKindError` é limite de etapa, não regra.** E-12 abre `WIN`/`LOSS`/`REFUND`/`ROLLBACK` no mesmo use case; `OPENING` vira `KIND_NOT_SUBMITTABLE` na borda de E-08 (RN-13). Ele **não** carrega `failureCode` — nenhum dos 13 códigos descreve "ainda não implementado".
 > - **O lock vem antes da consulta de idempotência**, e E-09 depende disso: é o `FOR UPDATE` da wallet que serializa a decisão de replay, e é por isso que RT-14 (50 apostas iguais em paralelo) deve ver replays limpos em vez de violação de unicidade no caminho normal.
 >
-> **Decisões em vigor:** D-001 MikroORM **sem plano B** · D-003 `Money` sobre **`bigint` de centavos** · D-004 coluna **`numeric(19,2)`** + mapper próprio · D-007 (13 `failureCode` fechados) · D-009 (outbox por claim com lease) · D-011 infra de teste **híbrida** · D-012 auth **não implementada** · D-013 (grafo sem self-loop; `FAILED` só em erro permanente ou DLQ) · D-014 (ids UUIDv7, cursor keyset de coluna única) · D-015 (escala de entrada exatamente 2 casas) · D-016 (`currency` validada por forma `[A-Z]{3}`, sem tabela ISO) · D-017 (`equals` lança em moeda diferente) · **D-018** (`debit`/`credit` devolvem o lançamento) · **D-019** (saldo insuficiente: consulta + guarda) · **D-020** (referência ausente é payload inválido) · **D-021** (movimentação exige valor estritamente positivo) · **D-022** (backoff equal jitter, política injetada na chamada) · **D-023** (imutabilidade do ledger por trigger) · **D-024** (unicidade de reversão parcial sobre `PROCESSED`) · **D-025** (PK composta na inbox; alcance de D-014 corrigido) · **D-026** (mapeamento por modelos de linha + mapper, não sobre as classes de domínio) · **D-027** (interfaces de repositório no domínio) · **D-028** (escrita por comando explícito, sem Unit of Work) · **D-029** (colunas de retry de referência sem dono até E-13) · **D-030** (saldo observado em coluna própria) · **D-031** (`WALLET_NOT_FOUND` é erro de aplicação, sem linha e sem evento) · **D-032** (`payloadHash` calculado no use case).
+> **O que E-08 deixou para as etapas seguintes:**
+> - **O mapa de status é um arquivo só, e mexer nele é mexer em RF-15.** `httpStatusForResult` (resultado) e `httpProblemFor` (exceção) vivem lado a lado de propósito: as cinco situações da §9 só se conferem lendo as duas metades juntas. Endpoint novo em E-14 **não** trata erro localmente — quem quebrar isso quebra a consistência que o enunciado cobra explicitamente.
+> - **`isTransientDatabaseError` é de E-11 tanto quanto é de E-08.** Está em `src/infrastructure/persistence/transient-error.ts`, e não junto do filtro, porque RF-21 precisa exatamente da mesma classificação para decidir retry contra DLQ. **Não criar uma segunda lista** — é o mesmo erro de duas curvas de backoff que D-022 evitou.
+> - **`UnsupportedKindError → 501` é temporário e E-12 o remove.** Quando `WIN`/`LOSS`/`REFUND`/`ROLLBACK` passarem a ser processados, o erro deixa de ser lançado e o ramo do mapa vira código morto. O teste que hoje espera `501` num `WIN` é o lembrete.
+> - **`internal` é um `providerId` reservado (D-033)** e aparece em `GET /providers/internal/...` quando E-14 ligar RF-12. A consulta funciona e devolve a `OPENING`; é auditoria legítima, não vazamento.
+> - **O consumidor de E-11 vai ver `WagerTransactionProcessed` com `kind: "OPENING"`** e `providerId: "internal"` (D-034). Quem escrever o consumidor precisa tolerar isso — é o preço de a invariante "toda transação aplicada tem evento" não ter exceção.
+> - **`POST /wallets` não exige `Idempotency-Key`, e isso foi decisão (D-033).** A proteção contra reabertura são as duas constraints — `uq_wallets_player_currency` e a `idempotency_key` derivada do `walletId`. Uma retentativa de rede sobre `POST /wallets` responde `409`, não abre wallet duplicada.
+> - **Não existe `main.ts`.** O `AppModule` está de pé e é exercitado pelos testes numa porta efêmera, mas **ninguém sobe o processo ainda** — nem há comando de linha para aplicar migration. Isso é de E-14/E-15, e o README é entregável avaliado: um avaliador que clone o repositório hoje não tem como subir a API.
+> - **A fronteira de lint agora cobre `src/interface/**`** (veto a `@aws-sdk/*`). O MikroORM continua permitido lá, porque é a camada que monta o grafo de dependências.
+> - **`registerRequestContext: false`** no `MikroOrmModule`: o middleware de identity map por requisição é justamente o que D-028 removeu. Ligá-lo reexporia o ledger ao `P0001` da trigger de D-023.
+> - **RN-11 tem prova de ponta a ponta agora:** rejeição por saldo insuficiente responde `422` com corpo de RF-13 e **zero** lançamentos no ledger.
+>
+> **Decisões em vigor:** D-001 MikroORM **sem plano B** · D-003 `Money` sobre **`bigint` de centavos** · D-004 coluna **`numeric(19,2)`** + mapper próprio · D-007 (13 `failureCode` fechados) · D-009 (outbox por claim com lease) · D-011 infra de teste **híbrida** · D-012 auth **não implementada** · D-013 (grafo sem self-loop; `FAILED` só em erro permanente ou DLQ) · D-014 (ids UUIDv7, cursor keyset de coluna única) · D-015 (escala de entrada exatamente 2 casas) · D-016 (`currency` validada por forma `[A-Z]{3}`, sem tabela ISO) · D-017 (`equals` lança em moeda diferente) · **D-018** (`debit`/`credit` devolvem o lançamento) · **D-019** (saldo insuficiente: consulta + guarda) · **D-020** (referência ausente é payload inválido) · **D-021** (movimentação exige valor estritamente positivo) · **D-022** (backoff equal jitter, política injetada na chamada) · **D-023** (imutabilidade do ledger por trigger) · **D-024** (unicidade de reversão parcial sobre `PROCESSED`) · **D-025** (PK composta na inbox; alcance de D-014 corrigido) · **D-026** (mapeamento por modelos de linha + mapper, não sobre as classes de domínio) · **D-027** (interfaces de repositório no domínio) · **D-028** (escrita por comando explícito, sem Unit of Work) · **D-029** (colunas de retry de referência sem dono até E-13) · **D-030** (saldo observado em coluna própria) · **D-031** (`WALLET_NOT_FOUND` é erro de aplicação, sem linha e sem evento) · **D-032** (`payloadHash` calculado no use case) · **D-033** (sentinelas internas na `OPENING`) · **D-034** (abertura publica os dois eventos) · **D-035** (duplicata de wallet traduzida no repositório) · **D-036** (desfecho é resultado, não exceção — emenda D-006) · **D-037** (`503` por lista de SQLSTATE; não mapeado é `500`) · **D-038** (parser artesanal, sem biblioteca de validação) · **D-039** (`correlationId` por header com fallback).
 >
 > Também decidido: D-002 (pessimistic `FOR UPDATE` por wallet) · D-005 (SHA-256 sobre lista fechada de 10 campos) · D-006 (`400`/`409`/`422`/`202`/`503`) · D-008 (defaults conservadores e configuráveis por ambiente).
 >
@@ -259,14 +271,15 @@ Não é arquitetura. É descobrir, na hora 2 e não na hora 40, se a stack fecha
 
 **Ler antes:** RF-08, RF-13, RF-14, RF-15, RN-13, RN-14, RT-05; D-005, D-006.
 **Escopo:**
-- [ ] `POST /wallets` com `OPENING` na mesma transação SQL e conflito em duplicata (RF-08).
-- [ ] `POST /wagering/transactions` com `Idempotency-Key` obrigatório (RF-13).
-- [ ] `payloadHash` canônico conforme D-005.
-- [ ] Filtro de exceções aplicando o mapa de D-006 **uniformemente em todos os endpoints** (RF-15).
-- [ ] `OPENING` submetido externamente é rejeitado (RN-13).
-- [ ] `ProviderIdentityPort` + `AuthGuard` no-op registrados como ponto de extensão, sem verificação (D-012). A identidade do provedor continua sujeita às validações de domínio (RN-07).
+- [x] `POST /wallets` com `OPENING` na mesma transação SQL e conflito em duplicata (RF-08). — use case `OpenWallet`; as seis colunas NOT NULL que a abertura não tem receberam sentinelas (**D-033**), e a duplicata é traduzida no repositório (**D-035**).
+- [x] `POST /wagering/transactions` com `Idempotency-Key` obrigatório (RF-13).
+- [x] `payloadHash` canônico conforme D-005. — já vinha de E-07 por D-032; a borda fechou o item que faltava, a **rejeição de `null`**.
+- [x] Filtro de exceções aplicando o mapa de D-006 **uniformemente em todos os endpoints** (RF-15). — com a emenda de **D-036**: desfecho de negócio é resultado, não exceção.
+- [x] `OPENING` submetido externamente é rejeitado (RN-13). — `422` com `KIND_NOT_SUBMITTABLE`; kind inexistente é `400`.
+- [x] `ProviderIdentityPort` + `AuthGuard` no-op registrados como ponto de extensão, sem verificação (D-012). A identidade do provedor continua sujeita às validações de domínio (RN-07). — a porta está **no caminho de toda submissão**, e é o `providerId` resolvido que segue para o use case.
+- [x] **Fora do previsto:** `OpenWallet` como use case próprio, `isTransientDatabaseError` (**D-037**), parser artesanal (**D-038**), correlação por header (**D-039**) e a fronteira de lint de `src/interface/**`. As cinco saíram de decisões que a etapa expôs ou do critério de conclusão.
 
-**Critério de conclusão:** RT-05 verde; teste que exercita as cinco situações de RF-15 e confere cinco códigos distintos.
+**Critério de conclusão:** RT-05 verde; teste que exercita as cinco situações de RF-15 e confere cinco códigos distintos. — **atendido**: 39 unitários novos (mapa de status e parser) e 23 de integração contra a aplicação NestJS de verdade, com `fetch` HTTP real e sem mock em ponto nenhum. RT-05 é provado na borda: replay devolve o mesmo `transactionId` com **um único débito** no ledger, e payload divergente é `409`.
 
 ## E-09 — PROVA DE CONCORRÊNCIA `[meta do dia 1]`
 

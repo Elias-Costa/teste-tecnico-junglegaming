@@ -80,6 +80,15 @@ Se não for possível confirmar a API, **diga isso** em vez de gerar código pla
 - `DecimalType` converte para `number` quando `runtimeType` é `'number'`. Por isso as colunas de dinheiro são mapeadas como `type: "string", columnType: "numeric(19,2)"`: nenhum tipo do ORM opina sobre o valor (EL-01).
 - O `CommitOrderCalculator` deriva a ordem dos `INSERT` das **relações declaradas**. Os modelos de linha de D-026 não declaram nenhuma, então quem ordena é o código do use case.
 
+**Fatos verificados em E-08** (mesma regra — não re-derivar, não contradizer):
+
+- `DriverException` copia **todas as próprias propriedades** do erro original ao envolvê-lo (`Object.getOwnPropertyNames(previous).forEach(...)`). É por isso que `.constraint` e `.code` do `pg` sobrevivem à conversão — sem eles, D-035 não teria como saber **qual** UNIQUE falhou, e D-037 não teria SQLSTATE para classificar.
+- O `PostgreSqlExceptionConverter` mapeia exatamente `40001`/`40P01`, `23502`, `23503`, `23505`, `23514`, `42601`, `42702`, `42703`, `42P01` e `42P07`. **Não produz `ConnectionException` nem `LockWaitTimeoutException`** — falha de conexão chega como `DriverException` base. Por isso a lista de D-037 é de SQLSTATE, e não de classes do ORM.
+- No NestJS 12, `createHandleResponseFn` é chamada **sem** o `httpStatusCode`, e o status do handler é aplicado **antes** do método rodar. Consequência prática: com `@Res({ passthrough: true })`, um `response.status(...)` dentro do controller **prevalece** sobre o padrão `201` do `POST`. É o que sustenta D-036.
+- `@types/express` **não** está instalado — `express` é transitivo de `@nestjs/platform-express`. O objeto de resposta é tipado por interface estrutural própria (`src/interface/http/http-response.ts`), nunca por import de tipo do express.
+- `MikroOrmCoreModule` registra o middleware de `RequestContext` por padrão (`registerRequestContext !== false`). Vai **desligado** neste projeto: identity map por requisição é exatamente o que D-028 removeu.
+- O `EntityManager` exportado por `@mikro-orm/postgresql` é o `PostgreSqlEntityManager`, e é ele que `PostgreSqlDriver.createEntityManager()` instancia — então injetá-lo por esse símbolo resolve o provider que o `MikroOrmModule` registra.
+
 ### 2.2 Quirks do ambiente de desenvolvimento
 
 - O Compose publica o PostgreSQL em **55432**, não 5432. Uma instalação nativa de PostgreSQL na máquina ocupa a 5432 e responde ao `localhost` antes do proxy do Docker; o sintoma é `28P01` com o container saudável e as credenciais corretas.

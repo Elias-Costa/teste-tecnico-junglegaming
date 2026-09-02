@@ -28,9 +28,9 @@ Registro leve de decisões, estilo ADR. Neste projeto ele tem **três** funçõe
 
 - **Dono de `reference_attempts` e `next_reference_attempt_at`** — aberto por **D-029**. As duas colunas existem no schema desde E-05 e não têm dono no domínio. E-13 escolhe entre levá-las ao agregado (um `scheduleReferenceRetry(now, policy)` reusando o `RetryPolicy` de D-022) ou tratá-las como estado operacional manipulado por `UPDATE` direto, como o lease da outbox em E-10. **Nada até E-12 depende disso:** por D-029, o repositório de E-06 simplesmente não escreve essas colunas, e nenhuma das duas saídas fica mais cara por causa disso.
 
-As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, e **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito. **Nenhuma etapa até E-12 está bloqueada.**
+As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito, e **D-033** a **D-039**, expostas por E-08 e resolvidas antes de a borda HTTP ser escrita. **Nenhuma etapa até E-12 está bloqueada.**
 
-A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022); e como aconteceu em E-05, onde o próprio escopo da etapa registrava duas vias sem escolher entre elas (D-023) e onde **dois documentos já registrados divergiam** sobre a chave da inbox (D-025); e como aconteceu em E-06, onde a rejeição do Custom Type em D-004 já implicava a forma do mapeamento sem que ninguém a tivesse registrado (D-026); e como aconteceu em E-07, onde RN-12 pedia um saldo que **nenhuma coluna guardava** (D-030) e onde **D-007 e o schema de E-05 se contradiziam** sobre `WALLET_NOT_FOUND` (D-031) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila curta não significa que não vão surgir mais.
+A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022); e como aconteceu em E-05, onde o próprio escopo da etapa registrava duas vias sem escolher entre elas (D-023) e onde **dois documentos já registrados divergiam** sobre a chave da inbox (D-025); e como aconteceu em E-06, onde a rejeição do Custom Type em D-004 já implicava a forma do mapeamento sem que ninguém a tivesse registrado (D-026); e como aconteceu em E-07, onde RN-12 pedia um saldo que **nenhuma coluna guardava** (D-030) e onde **D-007 e o schema de E-05 se contradiziam** sobre `WALLET_NOT_FOUND` (D-031); e como voltou a acontecer em E-08, a etapa que mais expôs decisões de uma vez — **sete** —, incluindo o caso em que **o schema de E-05 tornava impossível** a transação interna que RF-08 exige, por seis colunas NOT NULL sem valor natural na abertura (D-033), e o caso em que **a própria consequência de D-006 não cobria o caminho normal** que E-07 acabara de produzir (D-036) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila curta não significa que não vão surgir mais.
 
 ---
 
@@ -124,7 +124,7 @@ A fila continua valendo daqui em diante: se a implementação expuser uma decis�
 **Justificativa:** cada uma das cinco situações tem código próprio, e o provedor decide reenviar sem ler texto — que é o teste que a §9 propõe. Responder 200 com o resultado no corpo faria com que quem olha apenas o status HTTP não distinguisse aceite de rejeição. Responder 202 sempre contradiz o exemplo da própria §9, que mostra resposta síncrona com `status: PROCESSED` e `balance` já atualizado.
 
 **Consequências:**
-- O mapeamento vive num **filtro de exceção único**, aplicado a todos os endpoints. Endpoint que trate erro localmente quebra a consistência que a §9 cobra explicitamente.
+- O mapeamento vive num **filtro de exceção único**, aplicado a todos os endpoints. Endpoint que trate erro localmente quebra a consistência que a §9 cobra explicitamente. **Emendado por D-036:** o filtro é dono das exceções, e uma função pura ao lado dele é dona do resultado — rejeição de negócio e pendência chegam à borda como valor de retorno, não como exceção. Os dois pontos vivem no mesmo arquivo, e nenhum controller decide status por conta própria.
 - `422` sempre carrega um `failureCode` de D-007; `503` nunca carrega, porque não é decisão de negócio.
 - Os dois usos de `409` compartilham o mesmo eixo semântico — "este recurso já existe com outro conteúdo" — e por isso não colapsam situações distintas.
 - O teste de E-08 exercita as cinco situações e confere cinco códigos distintos.
@@ -779,3 +779,153 @@ A atomicidade de RF-23 não é afetada: ela vem do `em.transactional()`, que abr
 - A lista fechada de D-005 é montada campo a campo no use case, sem espalhar o comando: campo novo não entra no hash por acidente, e metadado de transporte não tem como entrar (§9).
 - O hash é calculado do `Money` já validado, não da entrada crua — a forma canônica de D-015 é o que garante um hash por valor.
 - **A rejeição de `null` que D-005 pede fica na borda de E-08**, onde o valor ainda é `unknown`. No comando tipado o `null` não tem como chegar, e o guard seria código que o compilador prova inalcançável — o lint com informação de tipos recusa.
+
+---
+
+## D-033 — Identidade da transação `OPENING` interna (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** RF-08 exige que saldo inicial maior que zero gere uma transação `OPENING` na mesma transação SQL. Mas `wager_transactions` (E-05) tem `provider_id`, `external_transaction_id`, `idempotency_key`, `payload_hash`, `round_id` e `game_id` **todos NOT NULL** — e a abertura de wallet não tem nenhum deles: não veio de provedor, não tem rodada, não tem jogo e não tem idempotency key de cliente.
+
+**Opções:**
+- **Sentinelas internas** para os seis campos, schema intacto.
+- **Exigir `Idempotency-Key` em `POST /wallets`**, usando a key do cliente na `OPENING`.
+- **Relaxar as colunas** por migration, tornando-as nulas para transações internas.
+
+**Decisão:** **sentinelas internas.** `providerId = "internal"`, `externalTransactionId = walletId`, `roundId = "internal"`, `gameId = "internal"`, `idempotencyKey = "opening:{walletId}"`, e `payloadHash` calculado pelo mesmo `payloadHashOf` de D-005 sobre esses valores.
+
+**Justificativa:** o schema é a fonte da verdade das invariantes (RI-09), e relaxar seis colunas NOT NULL para acomodar o único produtor interno enfraqueceria a garantia para os cinco kinds que vêm de fora — todo leitor, mapper e consumidor passaria a tratar `null` num campo de identidade. Exigir `Idempotency-Key` em `POST /wallets` acrescentaria ao contrato um header que RF-08 não pede, e criaria **dois significados para o `409` do mesmo endpoint**: key repetida e `playerId`+`currency` repetido. O `walletId` como `externalTransactionId` resolve de graça a unicidade de `(provider_id, external_transaction_id)` — é um id único por construção, dentro de um provedor sentinela.
+
+**Consequências:**
+- **`internal` passa a ser um `providerId` reservado.** Nada impede um provedor real de se chamar assim; a colisão seria recusada pela unicidade de `(provider_id, external_transaction_id)`, não aceita em silêncio. Vai para `ARCHITECTURE.md` como limitação conhecida.
+- A `OPENING` fica consultável por RF-12 como qualquer outra transação (`GET /providers/internal/wagering/transactions/{walletId}`), o que é desejável para auditoria.
+- `"opening:{walletId}"` na `idempotency_key` torna a reabertura da mesma wallet impossível por **duas** constraints independentes, não só pela de `(playerId, currency)`.
+- RN-13 continua barrando `OPENING` na borda: a factory interna do use case de abertura é a única produtora deste kind.
+
+---
+
+## D-034 — Eventos da abertura de wallet: os dois (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** RF-25 lista `WagerTransactionProcessed` para "qualquer transação aplicada" e `WalletBalanceChanged` "somente quando o saldo muda". A abertura de wallet produz uma transação `OPENING` que chega a `PROCESSED` e um lançamento `CREDIT` — mas nenhum provedor a submeteu, e nenhum documento dizia se ela publica.
+
+**Opções:**
+- **Os dois eventos.**
+- **Só `WalletBalanceChanged`** — o saldo mudou, mas `OPENING` não é operação de aposta.
+- **Nenhum** — abertura é gestão de conta, não fluxo de apostas.
+
+**Decisão:** **os dois eventos**, gravados na outbox dentro da mesma transação SQL da abertura.
+
+**Justificativa:** RF-25 é uma tabela sobre **o que aconteceu com o agregado**, não sobre quem pediu. A `OPENING` é uma transação aplicada e o saldo mudou; as duas linhas se aplicam pela letra. E há um ganho estrutural além da letra: com esta decisão, "toda transação que chega a `PROCESSED` tem evento" e "toda mudança de saldo tem `WalletBalanceChanged`" passam a valer **sem exceção** — um consumidor que reconstrói saldo por eventos não precisa saber que a primeira movimentação de cada wallet é especial. Omitir criaria a única transação `PROCESSED` do sistema sem rastro na outbox, e essa exceção teria que ser lembrada por quem escreve E-10, E-11 e a reconciliação de E-14.
+
+**Consequências:**
+- Abrir wallet com saldo grava **duas** linhas na outbox, atômicas com a wallet, a transação e o lançamento (RF-23).
+- O consumidor precisa tolerar `WagerTransactionProcessed` com `providerId: "internal"` e `kind: "OPENING"` (D-033).
+- **Saldo inicial zero não publica nada**: não há transação (RF-08 só gera `OPENING` acima de zero), não há lançamento (RF-04) e o saldo não mudou de valor.
+
+---
+
+## D-035 — Duplicata de wallet: tradução no repositório (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** RF-08 exige que wallet duplicada para `(playerId, currency)` falhe como conflito, e D-006 mapeia para `409`. A garantia é o `uq_wallets_player_currency` de E-05 (RI-09), que chega ao código como `UniqueConstraintViolationException` do MikroORM — tipo que `src/application` não pode importar (fronteira de lint de D-028).
+
+**Opções:**
+- **Repositório traduz** a exceção do ORM num erro de aplicação.
+- **Pré-checagem** por um `findByPlayerAndCurrency` novo no contrato de repositório.
+- **Filtro de exceção** reconhece a exceção do ORM direto.
+
+**Decisão:** **o repositório traduz.** `MikroWalletRepository.insert` captura a exceção, confere o nome da constraint e lança `WalletAlreadyExistsError`.
+
+**Justificativa:** a pré-checagem seria `read → check → write` sem lock, e a corrida perdida cairia na constraint de qualquer forma — ela acrescenta uma consulta e um método ao contrato sem eliminar o caminho de tradução. Deixar o filtro reconhecer a exceção do ORM colocaria a regra a três camadas da linha que a viola, e faria a interface importar MikroORM para uma pergunta que só o repositório sabe responder: **qual** UNIQUE foi violado, dado que a mesma exceção cobre cinco constraints diferentes desta base. Traduzir onde a exceção nasce mantém a garantia no banco e o conhecimento do ORM na infraestrutura.
+
+**Consequências:**
+- O repositório passa a inspecionar `.constraint` do erro. Verificado em `node_modules`: `DriverException` copia **todas as próprias propriedades** do erro original, então o nome da constraint vindo do `pg` sobrevive à conversão — registrado em `AGENTS.md` §2.1.
+- **`WalletAlreadyExistsError` não carrega `failureCode`**, pelo mesmo motivo de `UnsupportedKindError`: os 13 códigos de D-007 estão fechados e nenhum descreve "wallet já existe". Este `409` responde só mensagem, ao contrário do `409` de idempotência, que carrega `IDEMPOTENCY_CONFLICT` (D-031).
+- O padrão é reusável: E-12 precisa da mesma tradução para `uq_wager_transactions_reversal_once` (RN-09), onde a corrida perdida também é sinal, e não a mensagem de negócio que o provedor lê (D-024).
+
+---
+
+## D-036 — Desfecho de negócio → status HTTP: função pura na borda (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** D-006 fecha o mapa de status e diz que ele "vive num filtro de exceção único". Mas o use case de E-07 devolve um **resultado** para rejeição (`REJECTED`) e para pendência (`PENDING_REFERENCE`) — não uma exceção. Só payload inválido, conflito e falha de infraestrutura chegam à borda como exceção.
+
+**Opções:**
+- **Função pura na borda** decide o status do resultado; o filtro cuida só das exceções.
+- **Controller lança** uma exceção a partir do resultado, e o filtro único renderiza tudo.
+- **Interceptor** pós-processa o retorno do controller e ajusta o status.
+
+**Decisão:** **função pura.** `httpStatusForResult(status)` decide `200`/`202`/`422` a partir do resultado; o filtro de D-006 continua dono das exceções.
+
+**Justificativa:** rejeitar uma aposta por saldo insuficiente é desfecho **esperado e frequente** — RN-11 manda persisti-la como transação terminal auditável. Representá-la como exceção só para atravessar o filtro usaria o mecanismo de erro da linguagem para o caminho normal do negócio, e o custo apareceria no `try/catch` de quem reusar o controller. O interceptor unificaria os dois caminhos, mas esconderia do controller qual status ele responde — o oposto do critério de "se defende em uma frase". A consistência que a §9 cobra é **entre endpoints**, não entre mecanismos: as duas funções vivem no mesmo arquivo e nenhum controller decide status por conta própria.
+
+**Consequências:**
+- **Emenda a consequência de D-006:** o mapa vive em `src/interface/http/http-status-map.ts`, com dois pontos de entrada de dono único — resultado e exceção. Endpoint que trate erro localmente continua quebrando a consistência que a §9 cobra.
+- O `422` tem **duas formas de corpo**, ambas com `failureCode`: rejeição persistida responde o corpo inteiro de RF-13 (inclusive `transactionId`, que o provedor precisa para consultar); rejeição que não vira linha (D-031, RN-13) responde `{ failureCode, message }`.
+- O `202` fica testável antes de existir caminho que o produza: `BET` nunca alcança `PENDING_REFERENCE`, e E-12/E-13 abrem esse caminho sem tocar no mapa.
+
+---
+
+## D-037 — `503` e o destino do erro não mapeado (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** D-006 exige `503` em falha transitória de infraestrutura, mas não diz **como** a borda reconhece uma — nem o que responder a uma exceção que não é nenhuma das cinco situações de RF-15 (o mapa não tem `500`). A mesma classificação reaparece em RF-21, onde o consumidor de E-11 escolhe entre retry, DLQ e terminal.
+
+**Opções:**
+- **Filtro reconhece** o erro do ORM por lista explícita.
+- **Adaptadores encapsulam** em `TransientInfrastructureError` próprio.
+- **Tudo não mapeado é `503`**, sem `500` na API.
+
+**Decisão:** **o filtro reconhece**, por uma lista explícita de SQLSTATE transitórios. Exceção fora do mapa responde `500`.
+
+**Justificativa:** "tudo não mapeado é `503`" diria ao provedor "pode reenviar" diante de um bug nosso — e reenviar não conserta bug, então ele gastaria as cinco tentativas de D-008 para chegar ao mesmo lugar. Encapsular nos adaptadores daria a fronteira mais limpa, mas exigiria `try/catch` em cada método de cada repositório, escrito agora para um consumidor (E-11) que ainda não existe, e todo método novo passaria a ter que lembrar do envelope. A lista explícita é curta, auditável e vive num arquivo só.
+
+**Consequências:**
+- **A lista:** classe `08` (conexão), `40001` e `40P01` (serialização e deadlock), classe `53` (recursos esgotados), `55P03` (lock indisponível), `57014` (cancelado) e `57P01` (shutdown administrativo), mais os erros de rede sem SQLSTATE (`ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`).
+- A checagem vive em `src/infrastructure/persistence/transient-error.ts`, e **não** junto do filtro: **E-11 reusa a mesma função** para RF-21, e um worker não deve importar da camada de interface.
+- Verificado em `node_modules`: o `PostgreSqlExceptionConverter` **não produz** `ConnectionException` nem `LockWaitTimeoutException` — falha de conexão chega como `DriverException` base. Por isso a lista é de SQLSTATE, e não de classes do ORM.
+- **`500` passa a existir na API sem estar em D-006, e isso é deliberado:** ele não é uma das cinco situações de RF-15, é a ausência delas.
+
+---
+
+## D-038 — Validação de DTO: parser artesanal (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** os corpos de `POST /wallets` e `POST /wagering/transactions` chegam como `unknown` e precisam virar comando tipado. D-005 exige rejeitar `null` nos campos hasheados, D-015 exige recusar escala diferente de duas casas e RF-13 exige `Idempotency-Key`. Não há biblioteca de validação no projeto.
+
+**Opções:**
+- **Parser artesanal**, uma função por endpoint.
+- **`class-validator` + `class-transformer`** com `ValidationPipe` global.
+- **Zod** ou equivalente, com pipe próprio.
+
+**Decisão:** **parser artesanal** — função que recebe `unknown` e devolve o comando tipado, lançando `InvalidPayloadError` (`400`).
+
+**Justificativa:** a validação de **valor** já existe e é do domínio: `Money.from` decide escala (D-015) e forma da moeda (D-016), `WagerTransaction.create` decide a exigência de referência (D-020). O que falta na borda é estritamente forma — é objeto? o campo é string? veio `null`? Um `ValidationPipe` com decorators descreveria o dinheiro num segundo lugar, competindo com `Money.from`, e duas descrições da mesma regra divergem. Some-se que seriam duas dependências fora da stack listada em `AGENTS.md` §2, num projeto cuja orientação explícita é conferir API instalada antes de escrever (§2.1).
+
+**Consequências:**
+- Zero dependência nova; o `package.json` continua com o que a stack obrigatória pede.
+- O `null` de D-005 é rejeitado num só lugar, onde o valor ainda é `unknown` — fecha o item que D-032 deixou em aberto para esta etapa.
+- Um **número** JSON em `money.amount` é recusado por forma antes de chegar ao domínio, o que dá a EL-01 uma barreira na entrada além do lint e da coluna `numeric`.
+- Custo assumido: mensagens de erro e cobertura de campo são escritas e testadas à mão.
+
+---
+
+## D-039 — `correlationId` na borda HTTP (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** o comando de E-07 exige `correlationId` e RNF-06 exige o campo nos logs, mas nenhum documento dizia de onde a borda HTTP o tira. O enunciado não define header de correlação.
+
+**Opções:**
+- **Header opcional com fallback** gerado na borda.
+- **Sempre gerado**, header ignorado.
+- **Header obrigatório**, ausência é `400`.
+
+**Decisão:** **`X-Correlation-Id` quando o provedor manda; senão gerado na borda.** O valor usado é devolvido no mesmo header da resposta.
+
+**Justificativa:** RNF-06 quer rastro, não um segundo header obrigatório em RF-13 — que já tem o `Idempotency-Key`. Gerar sempre por conta própria quebraria o rastro de quem já correlaciona do seu lado, que é justamente o provedor mais maduro. Ecoar o valor na resposta é o que torna o rastro utilizável sem documentação extra: o provedor descobre o id mesmo quando não mandou nenhum.
+
+**Consequências:**
+- O `correlationId` é **entrada não confiável** quando vem do header: vai para log e para o envelope do evento, nunca para consulta SQL nem para decisão de negócio.
+- A geração usa o `IdGenerator` de D-014, não `crypto.randomUUID()` — um id só, uma fonte.
+- E-11 preenche o mesmo campo a partir do envelope da mensagem: a correlação atravessa HTTP → outbox → SQS → consumidor sem trocar de dono.

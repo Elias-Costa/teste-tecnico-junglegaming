@@ -146,6 +146,52 @@ export default tseslint.config(
   },
 
   // ---------------------------------------------------------------------------
+  // Módulos do NestJS
+  //
+  // Um módulo é uma classe vazia por desenho: todo o conteúdo está no decorator,
+  // e o container só precisa do símbolo como chave. `no-extraneous-class` está
+  // certa em geral e errada aqui, então a exceção é por padrão de nome de
+  // arquivo — não por comentário solto, que se espalharia a cada módulo novo.
+  // ---------------------------------------------------------------------------
+  {
+    files: ["src/**/*.module.ts"],
+    rules: {
+      "@typescript-eslint/no-extraneous-class": "off",
+    },
+  },
+
+  // ---------------------------------------------------------------------------
+  // Fronteira da borda HTTP — EL-06, RI-04
+  //
+  // A camada de interface é a segunda com motivo aparente para "publicar direto":
+  // o controller tem o resultado em mãos e o SDK estaria a um import de
+  // distância. A outbox é a única via, e um evento publicado no controller sairia
+  // **antes** do commit da transação que o use case abriu — EL-06 na forma mais
+  // difícil de enxergar em revisão, porque o caminho feliz continuaria correto.
+  //
+  // Ao contrário de `src/application`, o MikroORM é permitido aqui: é esta camada
+  // que monta o grafo de dependências (`app.module.ts`) e precisa do
+  // `EntityManager` para construir o `UnitOfWork`.
+  // ---------------------------------------------------------------------------
+  {
+    files: ["src/interface/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@aws-sdk/*"],
+              message:
+                "EL-06/RI-04: a publicação é exclusivamente pela outbox, dentro da transação do use case. Quem fala com o SQS é o worker de E-10.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // ---------------------------------------------------------------------------
   // Testes
   // ---------------------------------------------------------------------------
   {

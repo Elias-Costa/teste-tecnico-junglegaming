@@ -1,9 +1,15 @@
+import { UniqueConstraintViolationException } from "@mikro-orm/core";
 import { type EntityManager, LockMode } from "@mikro-orm/postgresql";
+import { WalletAlreadyExistsError } from "../../../application/errors/wallet-already-exists-error.ts";
 import type { WalletRepository } from "../../../domain/repositories/wallet-repository.ts";
 import type { Wallet } from "../../../domain/wallet.ts";
 import { toWallet, toWalletRow, toWalletUpdate } from "../mappers/wallet-mapper.ts";
 import { walletRowSchema } from "../rows/wallet-row.ts";
+import { violatedConstraintOf } from "../transient-error.ts";
 import { READ_WITHOUT_IDENTITY_MAP } from "./read-options.ts";
+
+/** Constraint de RI-09 que impõe uma wallet por `playerId` + `currency` (E-05). */
+const UNIQUE_PLAYER_CURRENCY = "uq_wallets_player_currency";
 
 /**
  * Repositório de wallet sobre o MikroORM (RF-02, D-026, D-028).
@@ -17,8 +23,35 @@ import { READ_WITHOUT_IDENTITY_MAP } from "./read-options.ts";
 export class MikroWalletRepository implements WalletRepository {
   constructor(private readonly em: EntityManager) {}
 
+  /**
+   * Grava uma wallet recém-aberta, traduzindo a duplicata em erro de aplicação
+   * (RF-08, D-035).
+   *
+   * A garantia de unicidade continua sendo do banco — `uq_wallets_player_currency`
+   * é quem recusa, como RI-09 exige. O que este `catch` faz é **traduzir**: só o
+   * repositório sabe qual das cinco constraints únicas desta base falhou, porque
+   * a mesma `UniqueConstraintViolationException` cobre todas elas, e
+   * `src/application` não pode importar o ORM (D-028).
+   *
+   * Uma violação de **outra** constraint é relançada como veio: ela seria um bug
+   * nosso, e mascará-la de "wallet já existe" contaria ao provedor uma história
+   * que não aconteceu.
+   *
+   * @throws WalletAlreadyExistsError quando o jogador já tem wallet nessa moeda.
+   */
   async insert(wallet: Wallet): Promise<void> {
-    await this.em.insert(walletRowSchema, toWalletRow(wallet));
+    try {
+      await this.em.insert(walletRowSchema, toWalletRow(wallet));
+    } catch (error) {
+      if (
+        error instanceof UniqueConstraintViolationException &&
+        violatedConstraintOf(error) === UNIQUE_PLAYER_CURRENCY
+      ) {
+        throw new WalletAlreadyExistsError(wallet.playerId, wallet.currency);
+      }
+
+      throw error;
+    }
   }
 
   async findById(id: string): Promise<Wallet | undefined> {
