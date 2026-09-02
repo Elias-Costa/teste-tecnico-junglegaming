@@ -12,6 +12,9 @@
  */
 import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { SQSClient } from "@aws-sdk/client-sqs";
+import { readSqsEnv } from "../../src/infrastructure/config/sqs-env.ts";
+import { ensureQueue } from "../../src/infrastructure/messaging/sqs-queue-provisioner.ts";
 
 /** Imagens fixadas nas mesmas versões do `docker-compose.yml`. */
 const POSTGRES_IMAGE = "postgres:17.11-alpine";
@@ -44,6 +47,25 @@ const started = (async () => {
   // O LocalStack não valida assinatura; as credenciais são fictícias por definição.
   process.env.AWS_ACCESS_KEY_ID = "test";
   process.env.AWS_SECRET_ACCESS_KEY = "test";
+
+  // A fila de saída de D-040, criada pelo MESMO `ensureQueue` que o worker usa
+  // (D-041). O container do LocalStack sobe vazio, e o Compose também não cria
+  // fila nenhuma — se este preload criasse a fila com um script próprio, nome e
+  // atributos passariam a ter duas fontes de verdade que precisariam concordar.
+  const env = readSqsEnv();
+  process.env.SQS_EVENTS_QUEUE = env.eventsQueueName;
+
+  const sqs = new SQSClient({
+    region: env.region,
+    endpoint: env.endpoint,
+    credentials: { accessKeyId: env.accessKeyId, secretAccessKey: env.secretAccessKey },
+  });
+
+  try {
+    await ensureQueue(sqs, env.eventsQueueName);
+  } finally {
+    sqs.destroy();
+  }
 })();
 
 await started;

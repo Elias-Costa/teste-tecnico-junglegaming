@@ -161,6 +161,10 @@ Submete uma operação de aposta.
 *Aceite:*
 - Funciona com **múltiplos publishers concorrentes**, sem perder nem duplicar indefinidamente. `[DECIDIDO: D-009]` — claim com lease (`locked_by`/`locked_until`) e commit imediato; o publish acontece fora da transação, nunca segurando conexão durante I/O de rede.
 - Cenário obrigatório: (1) Postgres confirma o commit; (2) o processo morre antes de publicar; (3) outra instância assume; (4) o evento é publicado; (5) publicação duplicada continua segura para o consumidor.
+- **O destino da publicação é decisão do candidato** — `[DECIDIDO: D-040]`, lacuna exposta por E-10: o enunciado (§10) nomeia só as filas de **entrada**. Fila FIFO dedicada `wagering-events.fifo`, com `MessageGroupId = aggregateId` (ordem por agregado, sem serializar agregados sem relação) e `MessageDeduplicationId` = id da linha da outbox. O dedup do SQS é **reforço** ao item 5, nunca a garantia dele — por RI-03, quem garante é a inbox do consumidor.
+- **Quem cria a fila** — `[DECIDIDO: D-041]`. Módulo idempotente compartilhado (`ensureQueue`), chamado pelo worker e pelo preload de teste, para que nome e atributos tenham uma fonte de verdade só (mesmo princípio de D-011).
+- **O `UPDATE` que marca `published_at` limpa o par do lease** — `[DECIDIDO: D-043]`, questão adiada por E-04/E-05. Lease é sobre trabalho em andamento; trabalho concluído não tem lease. Falha de publicação também solta o lease, junto com o reagendamento.
+- **Não há desistência** — `[DECIDIDO: D-042]`, emenda a D-008: as 10 tentativas limitam a **curva** do backoff e servem de limiar de alerta. A linha pendente continua sendo reivindicada até publicar, porque todo evento gravado na mesma transação do dinheiro precisa sair (D-034).
 
 **RF-25 — Eventos mínimos**
 

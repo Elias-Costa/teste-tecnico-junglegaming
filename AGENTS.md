@@ -89,6 +89,15 @@ Se não for possível confirmar a API, **diga isso** em vez de gerar código pla
 - `MikroOrmCoreModule` registra o middleware de `RequestContext` por padrão (`registerRequestContext !== false`). Vai **desligado** neste projeto: identity map por requisição é exatamente o que D-028 removeu.
 - O `EntityManager` exportado por `@mikro-orm/postgresql` é o `PostgreSqlEntityManager`, e é ele que `PostgreSqlDriver.createEntityManager()` instancia — então injetá-lo por esse símbolo resolve o provider que o `MikroOrmModule` registra.
 
+**Fatos verificados em E-10** (mesma regra — não re-derivar, não contradizer). Valem em cheio para E-11, que é a **outra** ponta do mesmo SDK:
+
+- `@aws-sdk/client-sqs@3.1123.0`: `CreateQueueRequest` tem `QueueName` e `Attributes?: Partial<Record<QueueAttributeName, string>>` — os atributos são **strings**, então FIFO é `{ [QueueAttributeName.FifoQueue]: "true" }`, nunca booleano. `SendMessageRequest` carrega `MessageGroupId` e `MessageDeduplicationId` como campos opcionais de primeiro nível.
+- `QueueNameExists` é uma **classe de exceção exportada** pelo pacote e só é lançada quando a fila existe com atributos **diferentes**. Com atributos iguais, `CreateQueue` é idempotente e devolve a URL existente — é o que sustenta D-041.
+- `Message.Attributes` é `Partial<Record<MessageSystemAttributeName, string>>` e vem **vazio** a menos que o `ReceiveMessage` peça `MessageSystemAttributeNames`. O campo antigo `AttributeNames` ainda existe, mas é tipado como `QueueAttributeName[]` — tipo diferente, e não é ele que traz `MessageGroupId`.
+- No `EntityManager`, `nativeUpdate` e os `find`/`findOne` com `disableIdentityMap: true` resolvem o contexto por `getContext(false)`, ou seja, **sem** a validação de `allowGlobalContext`. É o que permite `OutboxClaimStore` operar sobre o `orm.em` global fora de transação sem `cannotUseGlobalContext`.
+- `FindOptions.lockMode` é tipado como `Exclude<LockMode, LockMode.OPTIMISTIC>`; `FindOneOptions` omite `limit` e `lockMode` do `FindOptions` e redeclara `lockMode` sem a exclusão.
+- A regra `@typescript-eslint/no-unnecessary-condition` **estreita campos de `this`** através de um `while`: reler a bandeira de parada depois de um `await` vira erro de lint. A leitura precisa passar por um método (`isRunning()`), que o compilador não estreita. Vale para todo laço de worker — E-11 e E-13 vão esbarrar no mesmo.
+
 ### 2.2 Quirks do ambiente de desenvolvimento
 
 - O Compose publica o PostgreSQL em **55432**, não 5432. Uma instalação nativa de PostgreSQL na máquina ocupa a 5432 e responde ao `localhost` antes do proxy do Docker; o sintoma é `28P01` com o container saudável e as credenciais corretas.

@@ -28,11 +28,11 @@ Registro leve de decisões, estilo ADR. Neste projeto ele tem **três** funçõe
 
 - **Dono de `reference_attempts` e `next_reference_attempt_at`** — aberto por **D-029**. As duas colunas existem no schema desde E-05 e não têm dono no domínio. E-13 escolhe entre levá-las ao agregado (um `scheduleReferenceRetry(now, policy)` reusando o `RetryPolicy` de D-022) ou tratá-las como estado operacional manipulado por `UPDATE` direto, como o lease da outbox em E-10. **Nada até E-12 depende disso:** por D-029, o repositório de E-06 simplesmente não escreve essas colunas, e nenhuma das duas saídas fica mais cara por causa disso.
 
-As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito, e **D-033** a **D-039**, expostas por E-08 e resolvidas antes de a borda HTTP ser escrita. **Nenhuma etapa até E-12 está bloqueada.**
+As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito, **D-033** a **D-039**, expostas por E-08 e resolvidas antes de a borda HTTP ser escrita, e **D-040** a **D-043**, expostas por E-10 e resolvidas antes de o worker ser escrito. **Nenhuma etapa até E-12 está bloqueada.**
 
 **E-09 foi a primeira etapa a não expor decisão nenhuma**, e vale registrar por quê: ela não escreveu código de produção. A prova de concorrência é só teste, e a estratégia que ela verifica — pessimistic `FOR UPDATE` por wallet — já estava decidida em **D-002** desde 2026-09-01. A forma de RT-17 (três processos de sistema operacional subindo o `AppModule` inteiro, em vez de três chamadas ao use case no mesmo processo) também não foi escolha: **RI-08** cobra literalmente "correta com múltiplas **instâncias da aplicação**", e EL-05 é "correta somente com uma instância". Uma etapa sem decisão nova é sinal de que as anteriores foram bem fechadas, não de que alguém deixou de perguntar.
 
-A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022); e como aconteceu em E-05, onde o próprio escopo da etapa registrava duas vias sem escolher entre elas (D-023) e onde **dois documentos já registrados divergiam** sobre a chave da inbox (D-025); e como aconteceu em E-06, onde a rejeição do Custom Type em D-004 já implicava a forma do mapeamento sem que ninguém a tivesse registrado (D-026); e como aconteceu em E-07, onde RN-12 pedia um saldo que **nenhuma coluna guardava** (D-030) e onde **D-007 e o schema de E-05 se contradiziam** sobre `WALLET_NOT_FOUND` (D-031); e como voltou a acontecer em E-08, a etapa que mais expôs decisões de uma vez — **sete** —, incluindo o caso em que **o schema de E-05 tornava impossível** a transação interna que RF-08 exige, por seis colunas NOT NULL sem valor natural na abertura (D-033), e o caso em que **a própria consequência de D-006 não cobria o caminho normal** que E-07 acabara de produzir (D-036) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila curta não significa que não vão surgir mais.
+A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022); e como aconteceu em E-05, onde o próprio escopo da etapa registrava duas vias sem escolher entre elas (D-023) e onde **dois documentos já registrados divergiam** sobre a chave da inbox (D-025); e como aconteceu em E-06, onde a rejeição do Custom Type em D-004 já implicava a forma do mapeamento sem que ninguém a tivesse registrado (D-026); e como aconteceu em E-07, onde RN-12 pedia um saldo que **nenhuma coluna guardava** (D-030) e onde **D-007 e o schema de E-05 se contradiziam** sobre `WALLET_NOT_FOUND` (D-031); e como voltou a acontecer em E-08, a etapa que mais expôs decisões de uma vez — **sete** —, incluindo o caso em que **o schema de E-05 tornava impossível** a transação interna que RF-08 exige, por seis colunas NOT NULL sem valor natural na abertura (D-033), e o caso em que **a própria consequência de D-006 não cobria o caminho normal** que E-07 acabara de produzir (D-036); e como aconteceu de novo em E-10, onde o enunciado **nomeia as filas de entrada e nenhuma de saída** (D-040), onde o LocalStack sobe vazio e ninguém tinha o encargo de criar a fila (D-041), e onde **D-008 fixava um limite de tentativas sem dizer o que acontece depois dele** (D-042, que a emenda) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila curta não significa que não vão surgir mais.
 
 ---
 
@@ -931,3 +931,97 @@ A atomicidade de RF-23 não é afetada: ela vem do `em.transactional()`, que abr
 - O `correlationId` é **entrada não confiável** quando vem do header: vai para log e para o envelope do evento, nunca para consulta SQL nem para decisão de negócio.
 - A geração usa o `IdGenerator` de D-014, não `crypto.randomUUID()` — um id só, uma fonte.
 - E-11 preenche o mesmo campo a partir do envelope da mensagem: a correlação atravessa HTTP → outbox → SQS → consumidor sem trocar de dono.
+
+---
+
+## D-040 — Destino da publicação: fila FIFO dedicada de eventos (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-10. O enunciado (§10) nomeia **apenas as filas de entrada** — `wager-transactions.fifo` e a DLQ dela — e a §11 lista os quatro eventos que o worker da outbox publica **sem dizer para onde**. Nem `docs/requirements.md` nem `docs/decisions.md` supriam a lacuna, e sem ela o worker não tem alvo.
+
+**Opções:**
+- **Fila FIFO dedicada** de saída, com `MessageGroupId = aggregateId`.
+- Mesma fila FIFO dedicada, com `MessageGroupId = eventType`.
+- Fila **standard** (não-FIFO) para os eventos.
+- **Uma fila por tipo de evento** (quatro filas).
+
+**Decisão:** fila **`wagering-events.fifo`**, com `MessageGroupId = aggregateId` e `MessageDeduplicationId = id da linha da outbox`. O nome vem de `SQS_EVENTS_QUEUE`, com esse default.
+
+**Justificativa:** comando que chega e evento que sai são contratos distintos, e reaproveitar a fila de entrada faria o consumidor de E-11 ler os próprios eventos. Sobre o grupo: `aggregateId` dá ordem FIFO **por wallet ou por transação**, que é a ordem de que um consumidor precisa, sem serializar agregados que nada têm a ver uns com os outros — agrupar por `eventType` daria ordem global em quatro grupos, e um consumidor lento travaria eventos de agregados sem relação nenhuma, que é a mesma patologia que RI-06 proíbe do lado do banco. Fila standard foi descartada por destoar do par FIFO que o próprio enunciado nomeia; quatro filas, por quadruplicar provisionamento para um fan-out que nenhum teste exercita.
+
+O dedup id é o **id da linha da outbox**, e não o `eventId` de dentro do payload: os dois são estáveis, mas o da linha não exige abrir o `jsonb` para ser lido, e é ele que identifica a unidade de entrega que o worker republica.
+
+**Consequências:**
+- A republicação do at-least-once de D-009 cai na janela de deduplicação do próprio SQS. É **reforço** ao item 5 de RF-24, nunca a garantia: por RI-03, quem garante continua sendo a inbox persistente do consumidor.
+- `SqsEventPublisher` é o único ponto do sistema que fala com o SQS na direção de saída, e a regra de lint que veta `@aws-sdk/*` em `src/application/**` e `src/interface/**` existe para que continue assim (EL-06).
+- O sufixo `.fifo` no nome deixa de ser cosmético: é ele que faz `ensureQueue` criar a fila como FIFO (D-041) e que torna `MessageGroupId` obrigatório em cada publicação.
+- `ARCHITECTURE.md` registra que o destino dos eventos foi **decisão do candidato**, não do enunciado.
+
+---
+
+## D-041 — Provisionamento da fila: módulo idempotente compartilhado (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-10, consequência direta de D-040. O LocalStack sobe **vazio**, o `docker-compose.yml` não tem init hook e o `testcontainers-setup.ts` apenas popula variáveis de ambiente. Sem alguém criar a fila, o worker falha com "fila inexistente" nos dois caminhos de D-011.
+
+**Opções:**
+- **Módulo idempotente compartilhado** (`ensureQueue`), chamado pelo worker e pelo preload de teste.
+- **Init hook** do LocalStack no Compose + `CreateQueue` explícito no preload de teste.
+- Script `bun run provision` executado à mão depois do `docker compose up`.
+
+**Decisão:** `ensureQueue(client, queueName)` em `src/infrastructure/messaging/sqs-queue-provisioner.ts`, chamado pelo publisher na primeira publicação e pelo preload de Testcontainers.
+
+**Justificativa:** é a única das três em que nome e atributos da fila têm **uma** fonte de verdade. O init hook exigiria um script de shell no Compose e uma criação em TypeScript no preload, que precisariam concordar entre si — exatamente a duplicidade que D-011 existe para mitigar. O script manual seria mais transparente no README, mas vira um passo que, esquecido, faz o worker falhar em vez de simplesmente funcionar.
+
+`CreateQueue` é idempotente quando os atributos batem, e devolve a URL existente. `QueueNameExists` — a fila existe com atributos **diferentes** — cai para `GetQueueUrl`: recriar seria destruir fila alheia por causa de uma divergência de configuração.
+
+**Consequências:**
+- A URL é resolvida **uma vez** e memoizada como promessa: resolver a cada publicação poria uma ida à rede no caminho quente, e duas publicações simultâneas na primeira vez compartilham a mesma resolução.
+- `docker-compose.yml` não muda. Um avaliador sobe o Compose e o worker cria a fila sozinho.
+- `ContentBasedDeduplication` fica **desligado**: D-040 manda um dedup id explícito, e hash do corpo daria o mesmo resultado só por coincidência.
+- E-11 provisiona `wager-transactions.fifo` e a DLQ pelo **mesmo** módulo, incluindo a redrive policy de D-008.
+
+---
+
+## D-042 — Esgotamento da outbox: as 10 tentativas limitam a curva, não a entrega (2026-09-02)
+
+**Status:** DECIDIDA — **emenda D-008**
+**Contexto:** lacuna exposta por E-10. A tabela de D-008 fixa "tentativas de publicação da outbox: 10, teto de backoff 5 min", mas **nem RF-24 nem nenhuma decisão dizem o que acontece na 11ª**. A outbox não tem estado terminal nem coluna de falha, e a query de claim precisava de uma resposta para saber se filtra por `attempts`.
+
+**Opções:**
+- **O 10 limita a curva e serve de limiar de alerta**; a linha continua sendo reivindicada até publicar.
+- **Parar de reivindicar** acima de 10, deixando a linha à espera de intervenção.
+- **Coluna de estado terminal** na outbox (`failed_at`/`last_error`), com migration nova.
+
+**Decisão:** o 10 é o **teto do expoente do backoff** — que já satura em 5 min — e o **limiar de alerta**. Não há desistência: a linha pendente continua sendo reivindicada até ser publicada.
+
+**Justificativa:** todo evento gravado na outbox está lá porque foi confirmado **na mesma transação SQL do dinheiro** (RF-23). Desistir dele quebraria a invariante que D-034 acabou de comprar — "toda transação aplicada tem evento", sem exceção —, e a quebra seria silenciosa: o consumidor que reconstrói saldo por eventos ficaria errado sem nada denunciar. Parar de reivindicar tem o mesmo efeito com um nome melhor. A coluna de estado terminal seria mais auditável, mas amplia o schema de E-05 nesta etapa e cria um segundo conceito de DLQ ao lado do de RF-21, que é sobre mensagem **de entrada** — coisa diferente.
+
+O que se perde é a proteção contra uma linha envenenada girando para sempre. O custo é aceito porque o SQS aqui não valida conteúdo: uma publicação só falha por indisponibilidade, e indisponibilidade passa.
+
+**Consequências:**
+- A query de claim **não** filtra por `attempts`. Há teste com `attempts = 50` provando que a linha continua saindo.
+- `outbox_lag_seconds` (D-010, E-15) deixa de ser conveniência e passa a ser **o** sinal operacional: é ele que denuncia a linha que não sai.
+- `ARCHITECTURE.md` registra como **limitação conhecida**: sem alerta configurado sobre essa métrica, uma linha problemática gira indefinidamente sem ninguém ver.
+- A leitura literal de D-008 fica emendada. O número continua valendo, com outro significado.
+
+---
+
+## D-043 — O `UPDATE` de publicação limpa o par do lease (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** questão adiada explicitamente por E-04 e E-05 para esta etapa ("a entidade não limpa, para não divergir do SQL que ainda não existe"). O segundo `UPDATE` de D-009, o que marca `published_at`, também zera `locked_by`/`locked_until`?
+
+**Opções:**
+- **Limpar o par** junto com `published_at`.
+- **Manter o lease** como rastro de qual instância publicou.
+- Limpar o par e acrescentar uma coluna `published_by` só para a auditoria.
+
+**Decisão:** o mesmo `UPDATE` grava `published_at` e zera as duas metades do lease.
+
+**Justificativa:** lease é sobre **trabalho em andamento**, e trabalho concluído não tem lease. Mantê-lo deixaria toda linha publicada carregando um `locked_until` no passado que nenhuma consulta usa — o índice parcial de E-05 já exclui publicadas — e que quem lê a tabela num incidente teria de aprender a ignorar. A coluna nova de auditoria resolveria isso, mas exige migration para um dado que nenhum requisito pede.
+
+**Consequências:**
+- O par continua sendo escrito e apagado **junto**, sob `ck_outbox_messages_lease_pair` (E-05).
+- O lease é **estado operacional**, manipulado por `UPDATE` direto em `OutboxClaimStore`, e não estado do agregado: `OutboxMessage` segue sem método de liberação. É o mesmo padrão que D-029 oferece como uma das saídas para as colunas de retry de referência em E-13.
+- Falha de publicação **também** solta o lease, junto com o reagendamento: é o agendamento de D-022, e não o prazo do lease, que decide a próxima tentativa. Segurar o lease atrasaria uma retentativa de 1 s pelos 30 s do lease.

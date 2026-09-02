@@ -238,6 +238,60 @@ export async function expectLedgerReconciles(orm: MikroORM, walletId: string): P
 }
 
 /**
+ * Lê uma linha do stdout de um processo filho.
+ *
+ * O handshake dos programas de `tests/support/` é **uma** linha JSON, então não
+ * há necessidade de um leitor de linhas completo — basta acumular até o primeiro
+ * `\n`. Vive aqui, e não em cada teste, porque E-09 (RT-17) e E-10 (RT-19) usam
+ * o mesmo protocolo: sincronização por anúncio, nunca por `sleep`, que daria um
+ * teste que passa em máquina rápida e falha em máquina lenta.
+ *
+ * @throws Error se o processo encerrar antes de anunciar.
+ */
+export async function lerLinha(stream: ReadableStream<Uint8Array>): Promise<string> {
+  const leitor = stream.getReader();
+  const decodificador = new TextDecoder();
+  let acumulado = "";
+
+  try {
+    for (;;) {
+      const { value, done } = await leitor.read();
+
+      if (done) {
+        throw new Error("o processo encerrou antes de anunciar.");
+      }
+
+      acumulado += decodificador.decode(value, { stream: true });
+
+      const quebra = acumulado.indexOf("\n");
+
+      if (quebra >= 0) {
+        return acumulado.slice(0, quebra);
+      }
+    }
+  } finally {
+    leitor.releaseLock();
+  }
+}
+
+/** Impõe prazo a uma espera, para que uma falha de boot vire mensagem e não trava. */
+export async function comPrazo<T>(promessa: Promise<T>, ms: number, oQue: string): Promise<T> {
+  let temporizador: ReturnType<typeof setTimeout> | undefined;
+
+  const prazo = new Promise<never>((_, reject) => {
+    temporizador = setTimeout(() => {
+      reject(new Error(`${oQue} não aconteceu em ${String(ms)}ms.`));
+    }, ms);
+  });
+
+  try {
+    return await Promise.race([promessa, prazo]);
+  } finally {
+    clearTimeout(temporizador);
+  }
+}
+
+/**
  * Barreira de N participantes, com prazo que **rejeita** em vez de travar.
  *
  * Usada por RT-16 para provar a ausência de lock global (RI-06, RNF-01): se as N

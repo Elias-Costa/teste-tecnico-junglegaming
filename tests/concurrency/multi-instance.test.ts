@@ -31,8 +31,10 @@ import { WagerTransactionKind, WagerTransactionStatus } from "../../src/domain/w
 import { buildOrmConfig } from "../../src/infrastructure/persistence/orm-config.ts";
 import { IDEMPOTENCY_KEY_HEADER } from "../../src/interface/http/dto/parse-submit-transaction-request.ts";
 import {
+  comPrazo,
   debitosDe,
   expectLedgerReconciles,
+  lerLinha,
   MOEDA,
   saldoDe,
   transacoesDe,
@@ -63,57 +65,6 @@ interface Instancia {
 }
 
 const instancias: Instancia[] = [];
-
-/**
- * Lê uma linha do stdout do processo filho.
- *
- * O handshake é uma linha JSON só, então não há necessidade de um leitor de
- * linhas completo — basta acumular até o primeiro `\n`.
- *
- * @throws Error se o processo encerrar antes de anunciar.
- */
-async function lerLinha(stream: ReadableStream<Uint8Array>): Promise<string> {
-  const leitor = stream.getReader();
-  const decodificador = new TextDecoder();
-  let acumulado = "";
-
-  try {
-    for (;;) {
-      const { value, done } = await leitor.read();
-
-      if (done) {
-        throw new Error("a instância encerrou antes de anunciar que estava servindo.");
-      }
-
-      acumulado += decodificador.decode(value, { stream: true });
-
-      const quebra = acumulado.indexOf("\n");
-
-      if (quebra >= 0) {
-        return acumulado.slice(0, quebra);
-      }
-    }
-  } finally {
-    leitor.releaseLock();
-  }
-}
-
-/** Impõe prazo a uma espera, para que uma falha de boot vire mensagem e não trava. */
-async function comPrazo<T>(promessa: Promise<T>, ms: number, oQue: string): Promise<T> {
-  let temporizador: ReturnType<typeof setTimeout> | undefined;
-
-  const prazo = new Promise<never>((_, reject) => {
-    temporizador = setTimeout(() => {
-      reject(new Error(`${oQue} não aconteceu em ${String(ms)}ms.`));
-    }, ms);
-  });
-
-  try {
-    return await Promise.race([promessa, prazo]);
-  } finally {
-    clearTimeout(temporizador);
-  }
-}
 
 /**
  * Sobe uma instância da aplicação em processo próprio.
