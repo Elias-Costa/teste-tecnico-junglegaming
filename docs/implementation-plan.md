@@ -8,9 +8,9 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 
 ## Estado atual
 
-> **E-00 a E-06 CONCLUÍDAS** (2026-09-01). Stack validada de ponta a ponta, fundação de pé, núcleo de negócio fechado com teste, camada de mensageria do domínio pronta, schema no banco com as garantias de RI-09 e os cinco agregados indo e voltando do PostgreSQL real.
-> `bun run check` = typecheck limpo, lint limpo, **181 unitários verdes**. `bun run check:full` = mais **62 de integração**, autoprovisionados.
-> **Etapa atual: E-07 — Use case de processamento (`BET`).**
+> **E-00 a E-07 CONCLUÍDAS** (E-07 em 2026-09-02). Stack validada de ponta a ponta, fundação de pé, núcleo de negócio fechado com teste, camada de mensageria do domínio pronta, schema no banco com as garantias de RI-09, os cinco agregados indo e voltando do PostgreSQL real e **o caminho do dinheiro fechado numa transação SQL única, com atomicidade provada contra falha real do banco**.
+> `bun run check` = typecheck limpo, lint limpo, **197 unitários verdes**. `bun run check:full` = mais **79 de integração**, autoprovisionados.
+> **Etapa atual: E-08 — API HTTP: escrita.**
 >
 > **Achados do spike que valem para todas as etapas seguintes:**
 > - MikroORM v7 **não tem decorators** — mapeamento por `EntitySchema`. Isso torna a fronteira domínio/ORM estrutural em vez de convencional.
@@ -63,7 +63,17 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 > - **`reference_attempts` e `next_reference_attempt_at` continuam sem dono (D-029).** O repositório não as escreve, e há teste provando. **A decisão é de E-13** e está na fila de `docs/decisions.md`.
 > - **`WagerTransaction` não tem finder por `idempotencyKey` nem por `(providerId, externalTransactionId)`.** Ficou de fora por escopo: E-06 entrega o round-trip, e esses dois caminhos de leitura são de RF-12/RF-14, que E-07 e E-08 implementam. As constraints únicas já existem no schema.
 >
-> **Decisões em vigor:** D-001 MikroORM **sem plano B** · D-003 `Money` sobre **`bigint` de centavos** · D-004 coluna **`numeric(19,2)`** + mapper próprio · D-007 (13 `failureCode` fechados) · D-009 (outbox por claim com lease) · D-011 infra de teste **híbrida** · D-012 auth **não implementada** · D-013 (grafo sem self-loop; `FAILED` só em erro permanente ou DLQ) · D-014 (ids UUIDv7, cursor keyset de coluna única) · D-015 (escala de entrada exatamente 2 casas) · D-016 (`currency` validada por forma `[A-Z]{3}`, sem tabela ISO) · D-017 (`equals` lança em moeda diferente) · **D-018** (`debit`/`credit` devolvem o lançamento) · **D-019** (saldo insuficiente: consulta + guarda) · **D-020** (referência ausente é payload inválido) · **D-021** (movimentação exige valor estritamente positivo) · **D-022** (backoff equal jitter, política injetada na chamada) · **D-023** (imutabilidade do ledger por trigger) · **D-024** (unicidade de reversão parcial sobre `PROCESSED`) · **D-025** (PK composta na inbox; alcance de D-014 corrigido) · **D-026** (mapeamento por modelos de linha + mapper, não sobre as classes de domínio) · **D-027** (interfaces de repositório no domínio) · **D-028** (escrita por comando explícito, sem Unit of Work) · **D-029** (colunas de retry de referência sem dono até E-13).
+> **O que E-07 deixou para as etapas seguintes:**
+> - **O use case é a fronteira de validação, e E-08 é só a borda.** `Money.from`, a lista fechada do `payloadHash` (D-032) e a guarda de kind acontecem **antes** de abrir a transação. E-08 monta o comando a partir do corpo HTTP e traduz exceção em status (D-006) — não revalida nada, e revalidar criaria duas regras para a mesma coisa.
+> - **O `null` de D-005 ainda não é rejeitado em lugar nenhum.** No comando tipado ele não chega, e o guard seria código inalcançável. **É item de E-08**, na validação de DTO, onde o valor ainda é `unknown`.
+> - **A ordem de consumo de ids é contrato de teste.** `RT-09` injeta falha pela posição da chamada (`transação → lançamento → evento → outbox`). Mudar a ordem das escritas quebra os testes de propósito: a ordem **é** a garantia de FK de RF-23.
+> - **`recordInbox` grava, mas não pergunta.** Uma reentrega do mesmo `messageId` hoje colide com a PK de D-025 e aborta a transação inteira — o efeito no dinheiro continua único (EL-03), mas **quem transforma isso em "pular e dar ack" é E-11** (RF-19). O teste que prova o rollback já existe.
+> - **`WagerTransactionPendingReference` não é publicado por este use case.** `BET` nunca vai para `PENDING_REFERENCE`; o evento existe desde E-04 e ganha emissor em E-12/E-13.
+> - **O saldo da resposta de `202` (RN-15) continua em aberto.** `markPendingReference` não observa saldo (D-030), então a coluna fica nula e o replay cai no saldo corrente da wallet travada. **É decisão de E-13**, junto com D-029.
+> - **`UnsupportedKindError` é limite de etapa, não regra.** E-12 abre `WIN`/`LOSS`/`REFUND`/`ROLLBACK` no mesmo use case; `OPENING` vira `KIND_NOT_SUBMITTABLE` na borda de E-08 (RN-13). Ele **não** carrega `failureCode` — nenhum dos 13 códigos descreve "ainda não implementado".
+> - **O lock vem antes da consulta de idempotência**, e E-09 depende disso: é o `FOR UPDATE` da wallet que serializa a decisão de replay, e é por isso que RT-14 (50 apostas iguais em paralelo) deve ver replays limpos em vez de violação de unicidade no caminho normal.
+>
+> **Decisões em vigor:** D-001 MikroORM **sem plano B** · D-003 `Money` sobre **`bigint` de centavos** · D-004 coluna **`numeric(19,2)`** + mapper próprio · D-007 (13 `failureCode` fechados) · D-009 (outbox por claim com lease) · D-011 infra de teste **híbrida** · D-012 auth **não implementada** · D-013 (grafo sem self-loop; `FAILED` só em erro permanente ou DLQ) · D-014 (ids UUIDv7, cursor keyset de coluna única) · D-015 (escala de entrada exatamente 2 casas) · D-016 (`currency` validada por forma `[A-Z]{3}`, sem tabela ISO) · D-017 (`equals` lança em moeda diferente) · **D-018** (`debit`/`credit` devolvem o lançamento) · **D-019** (saldo insuficiente: consulta + guarda) · **D-020** (referência ausente é payload inválido) · **D-021** (movimentação exige valor estritamente positivo) · **D-022** (backoff equal jitter, política injetada na chamada) · **D-023** (imutabilidade do ledger por trigger) · **D-024** (unicidade de reversão parcial sobre `PROCESSED`) · **D-025** (PK composta na inbox; alcance de D-014 corrigido) · **D-026** (mapeamento por modelos de linha + mapper, não sobre as classes de domínio) · **D-027** (interfaces de repositório no domínio) · **D-028** (escrita por comando explícito, sem Unit of Work) · **D-029** (colunas de retry de referência sem dono até E-13) · **D-030** (saldo observado em coluna própria) · **D-031** (`WALLET_NOT_FOUND` é erro de aplicação, sem linha e sem evento) · **D-032** (`payloadHash` calculado no use case).
 >
 > Também decidido: D-002 (pessimistic `FOR UPDATE` por wallet) · D-005 (SHA-256 sobre lista fechada de 10 campos) · D-006 (`400`/`409`/`422`/`202`/`503`) · D-008 (defaults conservadores e configuráveis por ambiente).
 >
@@ -237,12 +247,13 @@ Não é arquitetura. É descobrir, na hora 2 e não na hora 40, se a stack fecha
 
 **Ler antes:** RF-18, RF-23, RN-01, RN-12, RI-04, RI-07, EL-06; D-002.
 **Escopo:**
-- [ ] `ProcessWagerTransaction` — **um único** use case, compartilhado por HTTP e SQS (RF-18).
-- [ ] Transação SQL única cobrindo: transação + saldo + ledger + inbox (quando aplicável) + outbox (RF-23).
-- [ ] Publicação **exclusivamente** via outbox. Nenhum `publish` direto no use case (RI-04, EL-06).
-- [ ] Replay retorna o resultado original, com o saldo observado à época (RN-12).
+- [x] `ProcessWagerTransaction` — **um único** use case, compartilhado por HTTP e SQS (RF-18). — a entrada por fila é o campo `inbox` do comando, não um segundo caminho.
+- [x] Transação SQL única cobrindo: transação + saldo + ledger + inbox (quando aplicável) + outbox (RF-23). — pela porta `UnitOfWork`, com os repositórios construídos dentro do callback (D-028).
+- [x] Publicação **exclusivamente** via outbox. Nenhum `publish` direto no use case (RI-04, EL-06). — reforçado por `no-restricted-imports` em `src/application/**`.
+- [x] Replay retorna o resultado original, com o saldo observado à época (RN-12). — **D-030**: o saldo é guardado na transação, porque rejeição e `LOSS` não deixam lançamento de onde reconstruí-lo.
+- [x] **Fora do previsto:** `observed_balance` (migration `m0002`), `findByIdempotencyKey` e a fronteira de lint da aplicação. As três saíram de decisões que a etapa expôs (D-030, D-032) ou do critério de conclusão.
 
-**Critério de conclusão:** RT-09 verde. Grep no `src/application` não encontra nenhuma chamada de cliente SQS.
+**Critério de conclusão:** RT-09 verde. Grep no `src/application` não encontra nenhuma chamada de cliente SQS. — **atendido**: 17 testes de integração novos, com as falhas injetadas pelo `IdGenerator` (colisão de id → `23505` real), sem nenhum mock.
 
 ## E-08 — API HTTP: escrita
 

@@ -34,6 +34,24 @@ export class MikroWagerTransactionRepository implements WagerTransactionReposito
     return row === null ? undefined : toWagerTransaction(row);
   }
 
+  /**
+   * Leitura por idempotency key (RF-14).
+   *
+   * **Sem lock**, e não é esquecimento: quem serializa a decisão de replay é o
+   * `FOR UPDATE` da wallet que o use case já segurou (D-002), e a unicidade da
+   * key é do banco (RI-09). Um segundo `FOR UPDATE` aqui espalharia a aquisição
+   * de lock por dois lugares, que é o que RI-06 pede para não acontecer.
+   */
+  async findByIdempotencyKey(idempotencyKey: string): Promise<WagerTransaction | undefined> {
+    const row = await this.em.findOne(
+      wagerTransactionRowSchema,
+      { idempotencyKey },
+      READ_WITHOUT_IDENTITY_MAP,
+    );
+
+    return row === null ? undefined : toWagerTransaction(row);
+  }
+
   async update(transaction: WagerTransaction): Promise<void> {
     await this.em.nativeUpdate(
       wagerTransactionRowSchema,

@@ -111,6 +111,41 @@ export default tseslint.config(
   },
 
   // ---------------------------------------------------------------------------
+  // Fronteira da aplicação — EL-06, RI-04, D-028
+  //
+  // O critério de conclusão de E-07 é "grep no `src/application` não encontra
+  // nenhuma chamada de cliente SQS". Grep é verificação de quem lembra de rodar;
+  // esta regra é a mesma verificação rodando no gate de toda etapa.
+  //
+  // O SDK da AWS está aí pelo motivo óbvio: publicar do use case é EL-06, e a
+  // outbox existe para ser a única via. O MikroORM está pelo motivo menos
+  // óbvio — a aplicação orquestra transação pela porta `UnitOfWork` (D-028), e
+  // um `EntityManager` importado aqui abriria caminho para escrita fora dela.
+  // ---------------------------------------------------------------------------
+  {
+    files: ["src/application/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@aws-sdk/*"],
+              message:
+                "EL-06/RI-04: a publicação é exclusivamente pela outbox. Quem fala com o SQS é o worker de E-10.",
+            },
+            {
+              group: ["@mikro-orm/*", "pg"],
+              message:
+                "D-028: a aplicação orquestra transação pela porta `UnitOfWork`. O ORM vive em `src/infrastructure`.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // ---------------------------------------------------------------------------
   // Testes
   // ---------------------------------------------------------------------------
   {

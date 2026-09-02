@@ -194,7 +194,7 @@ Submete uma operação de aposta.
 
 **RN-11** — Transação `REJECTED` não altera saldo nem gera ledger.
 
-**RN-12** — Repetir uma operação já processada retorna **o resultado original**, incluindo o **saldo observado naquele momento** — não o saldo atual.
+**RN-12** — Repetir uma operação já processada retorna **o resultado original**, incluindo o **saldo observado naquele momento** — não o saldo atual. `[DECIDIDO: D-030]` — o saldo é **guardado** na transação (`observed_balance`), não reconstruído pelo ledger: rejeição (RN-11) e `LOSS` (RN-03) não geram lançamento, e são justamente eles que a reconstrução não alcançaria.
 
 **RN-13** — `OPENING` é **interno**: não pode ser submetido pela API nem pela fila.
 
@@ -206,6 +206,8 @@ Submete uma operação de aposta.
 
 **RN-17 — Taxonomia de `failureCode`**
 Toda rejeição carrega um `failureCode` estável e legível por máquina, suficiente para o provedor decidir se **reenvia**, **corrige o payload** ou **desiste**. `[DECIDIDO: D-007]` — enum fechado de 11 códigos de negócio, com a ação esperada documentada por código em `ARCHITECTURE.md` (documentada, não transmitida). Os **2 códigos de infraestrutura** para o status `FAILED` (`PERMANENT_INFRASTRUCTURE_ERROR` e `MAX_RETRIES_EXHAUSTED`) foram aprovados em D-007, fechando o enum em **13**.
+
+`[DECIDIDO: D-031]` — **`WALLET_NOT_FOUND` e `IDEMPOTENCY_CONFLICT` nunca aparecem na coluna `failure_code`.** Os dois são rejeições que o schema impede de virar linha: a FK `fk_wager_transactions_wallet` recusa transação para wallet inexistente, e o `UNIQUE (idempotency_key)` recusa uma segunda linha sob a mesma key. Ambos trafegam na resposta (`422` e `409` por D-006) sem nada ser persistido e sem evento publicado.
 
 ---
 

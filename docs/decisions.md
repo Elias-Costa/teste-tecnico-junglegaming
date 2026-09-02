@@ -28,9 +28,9 @@ Registro leve de decisões, estilo ADR. Neste projeto ele tem **três** funçõe
 
 - **Dono de `reference_attempts` e `next_reference_attempt_at`** — aberto por **D-029**. As duas colunas existem no schema desde E-05 e não têm dono no domínio. E-13 escolhe entre levá-las ao agregado (um `scheduleReferenceRetry(now, policy)` reusando o `RetryPolicy` de D-022) ou tratá-las como estado operacional manipulado por `UPDATE` direto, como o lease da outbox em E-10. **Nada até E-12 depende disso:** por D-029, o repositório de E-06 simplesmente não escreve essas colunas, e nenhuma das duas saídas fica mais cara por causa disso.
 
-As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, e **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito. **Nenhuma etapa até E-12 está bloqueada.**
+As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, e **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito. **Nenhuma etapa até E-12 está bloqueada.**
 
-A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022); e como aconteceu em E-05, onde o próprio escopo da etapa registrava duas vias sem escolher entre elas (D-023) e onde **dois documentos já registrados divergiam** sobre a chave da inbox (D-025); e como aconteceu em E-06, onde a rejeição do Custom Type em D-004 já implicava a forma do mapeamento sem que ninguém a tivesse registrado (D-026) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila curta não significa que não vão surgir mais.
+A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022); e como aconteceu em E-05, onde o próprio escopo da etapa registrava duas vias sem escolher entre elas (D-023) e onde **dois documentos já registrados divergiam** sobre a chave da inbox (D-025); e como aconteceu em E-06, onde a rejeição do Custom Type em D-004 já implicava a forma do mapeamento sem que ninguém a tivesse registrado (D-026); e como aconteceu em E-07, onde RN-12 pedia um saldo que **nenhuma coluna guardava** (D-030) e onde **D-007 e o schema de E-05 se contradiziam** sobre `WALLET_NOT_FOUND` (D-031) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila curta não significa que não vão surgir mais.
 
 ---
 
@@ -714,3 +714,68 @@ A atomicidade de RF-23 não é afetada: ela vem do `em.transactional()`, que abr
 - Os modelos de linha declaram as duas colunas como **opcionais**, para que `em.insert()` não as inclua e o default do banco valha. O mapper não as lê nem as escreve.
 - **Decisão pendente, listada na fila:** se as duas colunas viram estado do agregado ou continuam operacionais, manipuladas por `UPDATE` direto como o lease da outbox em E-10. A escolha é de E-13.
 - O round-trip de E-06 asserta que as colunas seguem `0` e nulo depois de `insert` e de `update`. Sem esse teste, "o repositório não escreve" seria afirmação, não fato.
+
+---
+
+## D-030 — Saldo do replay: coluna `observed_balance` na transação (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-07. RN-12 exige que repetir uma operação já processada devolva **o resultado original, incluindo o saldo observado naquele momento** — explicitamente "não o saldo atual". Nenhuma coluna do schema de E-05 guarda esse valor. Para uma transação aplicada com movimento ele existe no `balance_after` do lançamento correspondente, mas **rejeição não gera lançamento** (RN-11) e **`LOSS` não gera lançamento** (RN-03): a reconstrução pelo ledger falha exatamente nos casos em que a pergunta é feita.
+
+**Opções:**
+- **Coluna própria**: `observed_balance` + `observed_balance_currency` em `wager_transactions`, escritas no desfecho.
+- **Reconstrução pelo ledger, com saldo atual nos casos sem lançamento**: sem migration, ao custo de violar a letra de RN-12 em rejeição e `LOSS`.
+- **Restringir o contrato**: só transação aplicada com movimento responde `balance`.
+
+**Decisão:** **coluna própria**, em migration nova (`m0002`), com o par valor+moeda e `CHECK` de par-ou-nada.
+
+**Justificativa:** a resposta de uma transação é parte do resultado dela; guardá-la é o que faz o replay **devolver** o resultado original em vez de tentar reconstruí-lo. A reconstrução pelo ledger é derivação indireta que se rompe justamente onde não há lançamento — e o caso sem lançamento não é exótico: é toda rejeição, que é metade do cenário obrigatório da §8. Restringir o contrato resolveria E-07 e voltaria a abrir em E-12, quando `LOSS` precisa responder saldo sem ter movido nada.
+
+**Consequências:**
+- `markProcessed` e `reject` passam a **exigir** o saldo observado. É o compilador impondo RN-12: não existe caminho que resolva uma transação sem registrar o saldo que respondeu.
+- `fail` e `markPendingReference` **não** o recebem — falha de infraestrutura não é resposta de negócio, e aguardar referência não é desfecho. A coluna fica nula nos dois casos, e **a resposta do `202` de RN-15 continua a ser definida em E-13**.
+- Duas colunas, não reuso de `currency`: a moeda do saldo é a **da wallet**, e as duas divergem precisamente na rejeição por `CURRENCY_MISMATCH` — o caso em que ler a coluna errada daria um valor plausível e errado.
+- Migration nova em vez de edição da `m0001`: uma migration já aplicada não muda de conteúdo mantendo o nome (RNF-09).
+- O par entra no `Pick` de `WagerTransactionUpdate` (D-028), porque é escrito por transição.
+
+---
+
+## D-031 — `WALLET_NOT_FOUND`: erro de aplicação, sem linha e sem evento (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** contradição entre documentos, exposta por E-07. D-007 lista `WALLET_NOT_FOUND` entre os códigos de **rejeição de negócio**, e o desenho geral persiste toda rejeição como transação terminal auditável (RN-11, RN-16). Mas a FK `fk_wager_transactions_wallet`, criada em E-05, **impede** inserir uma transação que aponta para wallet inexistente: a rejeição prevista por D-007 não tem como virar linha.
+
+**Opções:**
+- **Erro de aplicação**: nada persistido, nenhum evento.
+- **Sem linha, mas com evento**: `WagerTransactionRejected` na outbox — `aggregate_id` não tem FK.
+- **Relaxar a FK**: migration remove a restrição para que a rejeição fique persistida.
+
+**Decisão:** **erro de aplicação.** `WalletNotFoundError` carrega o `failureCode` de D-007 para o filtro de E-08 responder `422` (D-006); nada é gravado e nenhum evento é publicado.
+
+**Justificativa:** a integridade referencial que RI-09 cobra vale mais do que a uniformidade de "toda rejeição é uma linha" — uma transação apontando para wallet inexistente é dado inválido, não histórico. Publicar evento sem linha seria pior que não publicar: o consumidor receberia um fato sobre um agregado que não existe em lugar nenhum, e a consulta de RF-11 devolveria vazio para um `transactionId` que ele acabou de receber.
+
+**Consequências:**
+- `WALLET_NOT_FOUND` e `IDEMPOTENCY_CONFLICT` são os **dois códigos de D-007 que nunca aparecem na coluna `failure_code`** — o primeiro pela FK, o segundo pelo `UNIQUE (idempotency_key)`. É estrutural, imposto por constraint, e vai para `ARCHITECTURE.md` como propriedade do desenho e não como omissão.
+- Os dois continuam sendo códigos legítimos do contrato: eles trafegam na resposta, e é lá que o provedor os lê.
+- Para o consumidor de E-11, é erro de **negócio terminal** — ack, não retry: reenviar não faz a wallet passar a existir.
+- Teste em E-07 prova que nada é gravado e que nenhum evento sai.
+
+---
+
+## D-032 — `payloadHash` calculado no use case, não no caller (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** o roteiro põe o hash canônico de D-005 em E-08 (borda HTTP), mas E-07 precisa dele para gravar a transação e para decidir replay contra conflito (RF-14). A pergunta é onde ele nasce.
+
+**Opções:**
+- **No use case**, a partir dos campos de negócio do comando.
+- **No caller**, com o `payloadHash` entrando pronto no comando.
+
+**Decisão:** **no use case** (`src/application/payload-hash.ts`), a partir do `Money` já validado.
+
+**Justificativa:** RF-18 exige um caminho de processamento único para HTTP e SQS, e RF-14 exige que a mesma operação produza o mesmo hash pelos dois. Com o cálculo no caller, essa igualdade passaria a depender de duas implementações concordarem — e a divergência apareceria como `IDEMPOTENCY_CONFLICT` falso num reenvio legítimo, que é o pior modo de falha possível para o provedor. Antecipa um item de E-08, que passa a apenas ligar o endpoint e testar RT-05.
+
+**Consequências:**
+- A lista fechada de D-005 é montada campo a campo no use case, sem espalhar o comando: campo novo não entra no hash por acidente, e metadado de transporte não tem como entrar (§9).
+- O hash é calculado do `Money` já validado, não da entrada crua — a forma canônica de D-015 é o que garante um hash por valor.
+- **A rejeição de `null` que D-005 pede fica na borda de E-08**, onde o valor ainda é `unknown`. No comando tipado o `null` não tem como chegar, e o guard seria código que o compilador prova inalcançável — o lint com informação de tipos recusa.
