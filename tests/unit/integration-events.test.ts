@@ -117,7 +117,7 @@ describe("WalletBalanceChanged — somente quando o saldo muda (RF-25)", () => {
 describe("WagerTransactionProcessed — qualquer transação aplicada (RF-25)", () => {
   it("monta o envelope campo a campo", () => {
     const transaction = transacao();
-    transaction.markProcessed(undefined, AGORA);
+    transaction.markProcessed(undefined, brl("20.00"), AGORA);
 
     const event = WagerTransactionProcessed.from(transaction, ctx);
 
@@ -146,7 +146,7 @@ describe("WagerTransactionProcessed — qualquer transação aplicada (RF-25)", 
     // O ponto que o enunciado destaca: sem este evento, a única operação sem
     // efeito no saldo seria indistinguível, de fora, de uma que se perdeu.
     const transaction = transacao({ kind: WagerTransactionKind.Loss });
-    transaction.markProcessed(undefined, AGORA);
+    transaction.markProcessed(undefined, brl("20.00"), AGORA);
 
     const event = WagerTransactionProcessed.from(transaction, ctx);
 
@@ -156,7 +156,7 @@ describe("WagerTransactionProcessed — qualquer transação aplicada (RF-25)", 
 
   it("omite referenceTransactionId quando não houve referência", () => {
     const transaction = transacao();
-    transaction.markProcessed(undefined, AGORA);
+    transaction.markProcessed(undefined, brl("20.00"), AGORA);
 
     const envelope = WagerTransactionProcessed.from(transaction, ctx).toJSON();
 
@@ -168,7 +168,7 @@ describe("WagerTransactionProcessed — qualquer transação aplicada (RF-25)", 
       kind: WagerTransactionKind.Refund,
       referenceExternalTransactionId: "ext-bet-1",
     });
-    transaction.markProcessed("tx-bet-1", AGORA);
+    transaction.markProcessed("tx-bet-1", brl("20.00"), AGORA);
 
     const event = WagerTransactionProcessed.from(transaction, ctx);
 
@@ -179,7 +179,7 @@ describe("WagerTransactionProcessed — qualquer transação aplicada (RF-25)", 
 describe("WagerTransactionRejected — rejeição por regra de negócio (RF-25)", () => {
   it("monta o envelope campo a campo", () => {
     const transaction = transacao();
-    transaction.reject(BusinessFailureCode.InsufficientFunds);
+    transaction.reject(BusinessFailureCode.InsufficientFunds, brl("100.00"));
 
     const event = WagerTransactionRejected.from(
       transaction,
@@ -214,7 +214,7 @@ describe("WagerTransactionRejected — rejeição por regra de negócio (RF-25)"
       kind: WagerTransactionKind.Rollback,
       referenceExternalTransactionId: "ext-win-1",
     });
-    transaction.reject(BusinessFailureCode.InsufficientFundsOnReversal);
+    transaction.reject(BusinessFailureCode.InsufficientFundsOnReversal, brl("100.00"));
 
     const event = WagerTransactionRejected.from(
       transaction,
@@ -280,10 +280,10 @@ describe("Envelope IntegrationEvent — contrato comum (RF-07)", () => {
     const { wallet, entry } = walletComDebito();
 
     const processada = transacao();
-    processada.markProcessed(undefined, AGORA);
+    processada.markProcessed(undefined, brl("20.00"), AGORA);
 
     const rejeitada = transacao();
-    rejeitada.reject(BusinessFailureCode.InsufficientFunds);
+    rejeitada.reject(BusinessFailureCode.InsufficientFunds, brl("100.00"));
 
     const pendente = transacao({
       kind: WagerTransactionKind.Rollback,

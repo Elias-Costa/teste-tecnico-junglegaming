@@ -38,6 +38,15 @@ export interface WagerTransactionRow {
   referenceExternalTransactionId: string | null;
   referenceTransactionId: string | null;
   failureCode: FailureCode | null;
+  /**
+   * Saldo observado no desfecho, `numeric(19,2)` lido como string (D-030, D-004).
+   *
+   * Nulo enquanto não há desfecho. O par com a coluna de moeda é garantido pelo
+   * `CHECK` da m0002, não por este tipo.
+   */
+  observedBalance: string | null;
+  /** Moeda do saldo observado — a **da wallet**, que pode divergir de `currency` (D-030). */
+  observedBalanceCurrency: string | null;
   /** Sem dono no domínio (D-029) — o repositório nunca lê nem escreve. */
   referenceAttempts?: number;
   /** Sem dono no domínio (D-029) — o repositório nunca lê nem escreve. */
@@ -88,6 +97,18 @@ export const wagerTransactionRowSchema = new EntitySchema<WagerTransactionRow>({
       type: "string",
       columnType: "varchar(40)",
       fieldName: "failure_code",
+      nullable: true,
+    },
+    observedBalance: {
+      type: "string",
+      columnType: "numeric(19,2)",
+      fieldName: "observed_balance",
+      nullable: true,
+    },
+    observedBalanceCurrency: {
+      type: "string",
+      columnType: "varchar(3)",
+      fieldName: "observed_balance_currency",
       nullable: true,
     },
     // Declaradas para que o mapeamento continue sendo espelho fiel da tabela,

@@ -313,6 +313,9 @@ describe("round-trip de WagerTransaction (RF-03)", () => {
     expect(lida?.referenceExternalTransactionId).toBeUndefined();
     expect(lida?.failureCode).toBeUndefined();
     expect(lida?.processedAt).toBeUndefined();
+    // Sem desfecho, sem saldo observado (D-030). O par de colunas nulas volta
+    // como `undefined`, na mesma fronteira que traduz os outros nuláveis.
+    expect(lida?.observedBalance).toBeUndefined();
   });
 
   it("preserva a referência externa de um REFUND (RN-06)", async () => {
@@ -354,7 +357,7 @@ describe("round-trip de WagerTransaction (RF-03)", () => {
 
     await write((repos) => repos.transactions.insert(rollback));
 
-    rollback.markProcessed(openingTransaction.id, DEPOIS);
+    rollback.markProcessed(openingTransaction.id, brl("110.00"), DEPOIS);
     await write((repos) => repos.transactions.update(rollback));
 
     const lida = await readers().transactions.findById(rollback.id);
@@ -363,6 +366,10 @@ describe("round-trip de WagerTransaction (RF-03)", () => {
     expect(lida?.referenceTransactionId).toBe(openingTransaction.id);
     expect(lida?.processedAt?.getTime()).toBe(DEPOIS.getTime());
     expect(lida?.isTerminal()).toBe(true);
+    // D-030: o saldo observado volta do banco como o valor exato do desfecho —
+    // é ele que RN-12 devolve num replay, e um `update` que o esquecesse deixaria
+    // a coluna nula sem quebrar nenhuma outra asserção.
+    expect(lida?.observedBalance?.equals(brl("110.00"))).toBe(true);
   });
 
   it("update persiste reject com o código de negócio (RN-17, D-007)", async () => {
@@ -371,13 +378,16 @@ describe("round-trip de WagerTransaction (RF-03)", () => {
 
     await write((repos) => repos.transactions.insert(aposta));
 
-    aposta.reject(BusinessFailureCode.InsufficientFunds);
+    aposta.reject(BusinessFailureCode.InsufficientFunds, brl("50.00"));
     await write((repos) => repos.transactions.update(aposta));
 
     const lida = await readers().transactions.findById(aposta.id);
 
     expect(lida?.status).toBe(WagerTransactionStatus.Rejected);
     expect(lida?.failureCode).toBe(BusinessFailureCode.InsufficientFunds);
+    // A rejeição não move saldo (RN-11), mas responde um — e o replay repete
+    // esta resposta, não o saldo atual (RN-12, D-030).
+    expect(lida?.observedBalance?.equals(brl("50.00"))).toBe(true);
   });
 
   it("não escreve as colunas de retry de referência (D-029)", async () => {

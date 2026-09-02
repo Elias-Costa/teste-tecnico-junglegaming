@@ -91,6 +91,13 @@ export interface WagerTransactionState extends CreateWagerTransactionProps {
   status: WagerTransactionStatus;
   /** Id **interno** da referência, resolvido no processamento (RN-07). */
   referenceTransactionId?: string | undefined;
+  /**
+   * Saldo da wallet no instante em que a transação foi resolvida (RN-12, D-030).
+   *
+   * Ausente enquanto o desfecho não chegou. É o que o replay devolve — não o
+   * saldo atual —, e por isso é gravado junto da transição que o observou.
+   */
+  observedBalance?: Money | undefined;
   failureCode?: FailureCode | undefined;
   processedAt?: Date | undefined;
 }
@@ -119,6 +126,7 @@ export class WagerTransaction {
 
   private _status: WagerTransactionStatus;
   private _referenceTransactionId: string | undefined;
+  private _observedBalance: Money | undefined;
   private _failureCode: FailureCode | undefined;
   private _processedAt: Date | undefined;
 
@@ -145,6 +153,7 @@ export class WagerTransaction {
     this.createdAt = state.createdAt;
     this._status = state.status;
     this._referenceTransactionId = state.referenceTransactionId;
+    this._observedBalance = state.observedBalance;
     this._failureCode = state.failureCode;
     this._processedAt = state.processedAt;
   }
@@ -188,6 +197,11 @@ export class WagerTransaction {
     return this._referenceTransactionId;
   }
 
+  /** Saldo observado no desfecho — a resposta que o replay repete (RN-12, D-030). */
+  get observedBalance(): Money | undefined {
+    return this._observedBalance;
+  }
+
   get failureCode(): FailureCode | undefined {
     return this._failureCode;
   }
@@ -200,11 +214,20 @@ export class WagerTransaction {
    * Marca a transação como aplicada.
    *
    * @param referenceTransactionId id interno da referência resolvida, quando houver (RN-07).
+   * @param observedBalance saldo da wallet **depois** da aplicação — a resposta
+   * que RN-12 manda repetir no replay (D-030). Recebido em vez de derivado
+   * porque a transação não conhece a wallet: quem acabou de mover o saldo é o
+   * use case, e é ele que tem o valor exato do instante.
    * @throws InvalidTransactionStateError se o status atual não permitir (D-013).
    */
-  markProcessed(referenceTransactionId: string | undefined, at: Date): void {
+  markProcessed(
+    referenceTransactionId: string | undefined,
+    observedBalance: Money,
+    at: Date,
+  ): void {
     this.transitionTo(WagerTransactionStatus.Processed);
     this._referenceTransactionId = referenceTransactionId;
+    this._observedBalance = observedBalance;
     this._processedAt = at;
   }
 
@@ -214,6 +237,10 @@ export class WagerTransaction {
    * Válida **apenas a partir de `PENDING`** (D-013): chamá-la sobre uma transação
    * já em `PENDING_REFERENCE` lança, porque o reagendamento do worker de E-13 é
    * `UPDATE` nas colunas de tentativa, não uma transição repetida.
+   *
+   * **Não observa saldo** (D-030): aguardar referência não é desfecho, e a
+   * transação ainda vai passar por `markProcessed` ou `reject` — quem define o
+   * saldo da resposta de RN-15 é E-13, quando decidir a forma do `202`.
    *
    * @throws InvalidTransactionStateError se o status atual não permitir.
    */
@@ -228,10 +255,14 @@ export class WagerTransaction {
    * infraestrutura, e o tipo do parâmetro é o que impede os dois de se
    * misturarem sem depender de disciplina de quem escreve o use case.
    *
+   * @param observedBalance saldo da wallet no instante da rejeição (RN-12, D-030).
+   * A rejeição não move saldo (RN-11), mas responde um — e responder o saldo
+   * atual num replay posterior é justamente o que RN-12 proíbe.
    * @throws InvalidTransactionStateError se o status atual não permitir.
    */
-  reject(code: BusinessFailureCode): void {
+  reject(code: BusinessFailureCode, observedBalance: Money): void {
     this.transitionTo(WagerTransactionStatus.Rejected);
+    this._observedBalance = observedBalance;
     this._failureCode = code;
   }
 
@@ -242,6 +273,10 @@ export class WagerTransaction {
    * mensagem para retry. Marcar `FAILED` em indisponibilidade momentânea do
    * Postgres queimaria transações recuperáveis, que é o oposto do cenário de
    * recuperação que a §3 do enunciado exige que funcione.
+   *
+   * **Não observa saldo** (D-030): falha de infraestrutura não é resposta de
+   * negócio e não tem saldo a preservar — o processamento sequer chegou a olhar
+   * a wallet em boa parte dos casos.
    *
    * @throws InvalidTransactionStateError se o status atual não permitir.
    */

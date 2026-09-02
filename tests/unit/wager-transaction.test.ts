@@ -17,6 +17,14 @@ import {
 
 const EM = new Date("2026-09-01T12:00:00.000Z");
 
+/**
+ * Saldo observado no desfecho (D-030).
+ *
+ * Valor arbitrário: o que estes testes verificam é que a transição o preserva,
+ * não de onde ele veio — a origem é o use case de E-07, com a wallet travada.
+ */
+const SALDO = Money.from({ amount: "20.00", currency: "BRL" });
+
 const props = (
   overrides: Partial<CreateWagerTransactionProps> = {},
 ): CreateWagerTransactionProps => ({
@@ -51,7 +59,7 @@ const TRANSICOES: ReadonlyArray<[WagerTransactionStatus, (transacao: WagerTransa
   [
     WagerTransactionStatus.Processed,
     (t) => {
-      t.markProcessed(undefined, EM);
+      t.markProcessed(undefined, SALDO, EM);
     },
   ],
   [
@@ -63,7 +71,7 @@ const TRANSICOES: ReadonlyArray<[WagerTransactionStatus, (transacao: WagerTransa
   [
     WagerTransactionStatus.Rejected,
     (t) => {
-      t.reject(BusinessFailureCode.InsufficientFunds);
+      t.reject(BusinessFailureCode.InsufficientFunds, SALDO);
     },
   ],
   [
@@ -153,16 +161,46 @@ describe("WagerTransaction — matriz de transições (RT-07, D-013)", () => {
 
   it("markProcessed grava referência resolvida e instante", () => {
     const transacao = WagerTransaction.create(props());
-    transacao.markProcessed("tx-referenciada", EM);
+    transacao.markProcessed("tx-referenciada", SALDO, EM);
 
     expect(transacao.status).toBe(WagerTransactionStatus.Processed);
     expect(transacao.referenceTransactionId).toBe("tx-referenciada");
     expect(transacao.processedAt).toEqual(EM);
   });
 
+  it("o desfecho guarda o saldo observado; o que não é desfecho não guarda (RN-12, D-030)", () => {
+    // É este valor que o replay devolve. Guardá-lo na transição é o que faz a
+    // resposta original sobreviver a movimentações posteriores da wallet.
+    const aplicada = WagerTransaction.create(props());
+    aplicada.markProcessed(undefined, SALDO, EM);
+    expect(aplicada.observedBalance?.equals(SALDO)).toBe(true);
+
+    const rejeitada = WagerTransaction.create(props());
+    rejeitada.reject(BusinessFailureCode.InsufficientFunds, SALDO);
+    expect(rejeitada.observedBalance?.equals(SALDO)).toBe(true);
+
+    // Nasce sem saldo observado, e o que não é desfecho não o inventa: aguardar
+    // referência (E-13) e falhar por infraestrutura (D-013) deixam a coluna nula.
+    const nova = WagerTransaction.create(props());
+    expect(nova.observedBalance).toBeUndefined();
+
+    const aguardando = WagerTransaction.create(
+      props({
+        kind: WagerTransactionKind.Rollback,
+        referenceExternalTransactionId: "ext-origem",
+      }),
+    );
+    aguardando.markPendingReference();
+    expect(aguardando.observedBalance).toBeUndefined();
+
+    const falha = WagerTransaction.create(props());
+    falha.fail(InfrastructureFailureCode.PermanentInfrastructureError);
+    expect(falha.observedBalance).toBeUndefined();
+  });
+
   it("reject e fail gravam o failureCode", () => {
     const rejeitada = WagerTransaction.create(props());
-    rejeitada.reject(BusinessFailureCode.InsufficientFunds);
+    rejeitada.reject(BusinessFailureCode.InsufficientFunds, SALDO);
     expect(rejeitada.failureCode).toBe(BusinessFailureCode.InsufficientFunds);
 
     const falha = WagerTransaction.create(props());

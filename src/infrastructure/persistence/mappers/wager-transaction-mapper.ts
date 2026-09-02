@@ -5,7 +5,8 @@ import type { WagerTransactionRow } from "../rows/wager-transaction-row.ts";
 /**
  * As colunas que um `update` de transação escreve (D-028, D-013).
  *
- * São exatamente as quatro que as transições de `WagerTransaction` alteram.
+ * São exatamente as que as transições de `WagerTransaction` alteram — incluindo
+ * o par do saldo observado, escrito por `markProcessed` e `reject` (D-030).
  * Identidade e payload são imutáveis do nascimento ao terminal, e
  * `reference_attempts`/`next_reference_attempt_at` estão fora por D-029 — a
  * ausência delas neste `Pick` é o que garante que um `update` de status não
@@ -13,8 +14,35 @@ import type { WagerTransactionRow } from "../rows/wager-transaction-row.ts";
  */
 export type WagerTransactionUpdate = Pick<
   WagerTransactionRow,
-  "status" | "referenceTransactionId" | "failureCode" | "processedAt"
+  | "status"
+  | "referenceTransactionId"
+  | "observedBalance"
+  | "observedBalanceCurrency"
+  | "failureCode"
+  | "processedAt"
 >;
+
+/**
+ * Traduz o saldo observado para o par de colunas, ou para o par de nulos (D-030).
+ *
+ * Existe como função porque os dois call sites — `insert` e `update` — precisam
+ * escrever o par com a mesma regra, e o `CHECK` da m0002 recusa metade
+ * preenchida. Um dos dois montando o par por conta própria é como a constraint
+ * passaria a ser descoberta em runtime.
+ */
+function toObservedBalanceColumns(
+  transaction: WagerTransaction,
+): Pick<WagerTransactionRow, "observedBalance" | "observedBalanceCurrency"> {
+  const observed = transaction.observedBalance;
+
+  if (observed === undefined) {
+    return { observedBalance: null, observedBalanceCurrency: null };
+  }
+
+  const columns = moneyToColumns(observed);
+
+  return { observedBalance: columns.amount, observedBalanceCurrency: columns.currency };
+}
 
 /**
  * Converte a transação para a linha completa, para `insert`.
@@ -42,6 +70,7 @@ export function toWagerTransactionRow(transaction: WagerTransaction): WagerTrans
     status: transaction.status,
     referenceExternalTransactionId: transaction.referenceExternalTransactionId ?? null,
     referenceTransactionId: transaction.referenceTransactionId ?? null,
+    ...toObservedBalanceColumns(transaction),
     failureCode: transaction.failureCode ?? null,
     createdAt: transaction.createdAt,
     processedAt: transaction.processedAt ?? null,
@@ -55,6 +84,7 @@ export function toWagerTransactionUpdate(
   return {
     status: transaction.status,
     referenceTransactionId: transaction.referenceTransactionId ?? null,
+    ...toObservedBalanceColumns(transaction),
     failureCode: transaction.failureCode ?? null,
     processedAt: transaction.processedAt ?? null,
   };
@@ -86,6 +116,14 @@ export function toWagerTransaction(row: WagerTransactionRow): WagerTransaction {
     createdAt: row.createdAt,
     status: row.status,
     referenceTransactionId: row.referenceTransactionId ?? undefined,
+    // As duas colunas são par por `CHECK` (D-030), mas o tipo da linha permite
+    // cada uma ser nula sozinha. Testar as duas é o que dispensa uma asserção
+    // não-nula aqui — a alternativa seria confiar na constraint em código que o
+    // compilador não tem como verificar.
+    observedBalance:
+      row.observedBalance === null || row.observedBalanceCurrency === null
+        ? undefined
+        : moneyFromColumns(row.observedBalance, row.observedBalanceCurrency),
     failureCode: row.failureCode ?? undefined,
     processedAt: row.processedAt ?? undefined,
   });
