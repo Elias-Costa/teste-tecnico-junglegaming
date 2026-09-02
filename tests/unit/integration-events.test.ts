@@ -37,6 +37,7 @@ const transacao = (overrides: Partial<CreateWagerTransactionProps> = {}): WagerT
     externalTransactionId: "ext-1",
     idempotencyKey: "idem-1",
     payloadHash: "c".repeat(64),
+    correlationId: "corr-1",
     walletId: "wallet-1",
     playerId: "player-1",
     roundId: "round-1",

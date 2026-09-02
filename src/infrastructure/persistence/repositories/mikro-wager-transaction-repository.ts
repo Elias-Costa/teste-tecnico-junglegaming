@@ -16,10 +16,11 @@ import { READ_WITHOUT_IDENTITY_MAP } from "./read-options.ts";
 /**
  * Repositório de transação de aposta sobre o MikroORM (RF-03, D-026, D-028).
  *
- * O `update` escreve a lista fechada de `WagerTransactionUpdate` — as quatro
- * colunas que as transições de D-013 alteram. As colunas de retry de referência
- * ficam de fora por D-029: quando E-13 passar a mexer nelas, nenhum `update` de
- * status vindo daqui vai sobrescrever o que ela escreveu.
+ * O `update` escreve a lista fechada de `WagerTransactionUpdate` — as colunas que
+ * as transições de D-013 alteram. As de retry de referência ficam de fora por
+ * D-029/D-052: quem as escreve é o `PendingReferenceStore`, e a ausência delas no
+ * `Pick` é o que garante que um `update` de status vindo daqui não apague o
+ * reagendamento do worker de RF-26 — nem o contrário.
  */
 export class MikroWagerTransactionRepository implements WagerTransactionRepository {
   constructor(private readonly em: EntityManager) {}

@@ -6,7 +6,7 @@ import type { WagerTransaction, WagerTransactionKind } from "../wager-transactio
  * `update` escreve apenas o que as transições de D-013 alteram — status,
  * referência resolvida, `failureCode` e `processedAt`. A identidade e o payload
  * são imutáveis do nascimento ao terminal, e o contador de tentativas de
- * referência não tem dono no domínio (D-029).
+ * referência é estado operacional, escrito por fora (D-029, D-052).
  */
 export interface WagerTransactionRepository {
   /** Grava uma transação recém-criada, em `PENDING`. */

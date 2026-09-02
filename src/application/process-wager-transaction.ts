@@ -18,6 +18,7 @@ import type { Wallet } from "../domain/wallet.ts";
 import type { WalletLedgerEntry } from "../domain/wallet-ledger-entry.ts";
 import { IdempotencyConflictError } from "./errors/idempotency-conflict-error.ts";
 import { KindNotSubmittableError } from "./errors/kind-not-submittable-error.ts";
+import { UnresolvablePendingReferenceError } from "./errors/unresolvable-pending-reference-error.ts";
 import { WalletNotFoundError } from "./errors/wallet-not-found-error.ts";
 import { payloadHashOf } from "./payload-hash.ts";
 import type { Clock } from "./ports/clock.ts";
@@ -91,8 +92,33 @@ type TransactionOutcome =
   | { readonly outcome: "rejected"; readonly failureCode: BusinessFailureCode }
   | { readonly outcome: "pending-reference" };
 
+/**
+ * Rastro que um evento de integração herda de quem provocou o desfecho (RNF-06).
+ *
+ * Existe porque **os desfechos têm duas origens**: a submissão, que traz a
+ * correlação do provedor no comando, e o worker de RF-26, que resolve uma
+ * `PENDING_REFERENCE` fora de qualquer requisição e relê a correlação guardada na
+ * própria transação (D-055). Tipar o rastro em vez de passar o comando é o que
+ * permite os dois caminhos alimentarem o mesmo `contextFor`.
+ */
+interface EventTrace {
+  correlationId: string;
+  causationId?: string | undefined;
+}
+
 /** Os dois kinds que revertem outra transação (RN-04, RN-05). */
 type ReversalKind = WagerTransactionKind.Refund | WagerTransactionKind.Rollback;
+
+/**
+ * Estreita o kind para os dois que revertem (RN-04, RN-05).
+ *
+ * O compilador conhece `ReversalKind` pelo `switch` de `decide`, mas não tem como
+ * derivá-lo de uma linha **lida do banco**: `resolvePendingReference` recebe um id
+ * e precisa recuperar a garantia que o caminho de submissão tinha de graça.
+ */
+function isReversalKind(kind: WagerTransactionKind): kind is ReversalKind {
+  return kind === WagerTransactionKind.Refund || kind === WagerTransactionKind.Rollback;
+}
 
 /**
  * O que cada reversão pode referenciar (RN-08).
@@ -208,6 +234,153 @@ export class ProcessWagerTransaction {
   }
 
   /**
+   * Reprocessa uma transação que ficou esperando a referência (RF-26, RN-15).
+   *
+   * **Segunda entrada do mesmo use case, e não um use case novo** (D-054): a
+   * decisão de uma reversão é uma só — RN-04 a RN-10, na ordem de D-051 —, e
+   * `decideReversal` é o único lugar que a implementa. Um segundo objeto com as
+   * mesmas regras seria a forma mais fácil de o worker e a submissão divergirem
+   * justamente no ponto em que a divergência move dinheiro.
+   *
+   * Três desfechos possíveis, todos numa transação SQL única (RF-23):
+   *
+   *  - a referência chegou e é válida → `PROCESSED`, com saldo, lançamento e
+   *    eventos, exatamente como se a reversão tivesse chegado depois dela;
+   *  - a referência chegou e é inválida → `REJECTED` com o código de D-051;
+   *  - a referência continua ausente → nada é escrito, e o status devolvido diz
+   *    ao worker que ele precisa reagendar (D-052). Passado o `deadline`, essa
+   *    espera vira `REJECTED` com `REFERENCE_NOT_FOUND` (RF-26).
+   *
+   * @param deadline instante-limite de nascimento: uma transação criada **antes**
+   * dele esgotou o TTL de D-008. Chega por parâmetro, e não lido do ambiente, pelo
+   * mesmo motivo de D-022 — política é da infraestrutura, e o use case não a lê.
+   * @returns o status da transação ao fim da tentativa, ou `undefined` se a linha
+   * não existe. `PENDING_REFERENCE` significa "ainda esperando, reagende".
+   * @throws UnresolvablePendingReferenceError se a linha não for uma reversão.
+   */
+  async resolvePendingReference(
+    transactionId: string,
+    deadline: Date,
+  ): Promise<WagerTransactionStatus | undefined> {
+    return this.unitOfWork.run(async (repos) => {
+      const now = this.clock.now();
+
+      // Leitura sem lock, e só para descobrir **qual wallet travar**: o lock de
+      // D-002 é por wallet, e não há como pedi-lo antes de saber o id dela.
+      const candidate = await repos.transactions.findById(transactionId);
+
+      if (candidate === undefined) {
+        return undefined;
+      }
+
+      const wallet = await repos.wallets.findByIdForUpdate(candidate.walletId);
+
+      if (wallet === undefined) {
+        // Inalcançável: `fk_wager_transactions_wallet` (E-05) impede uma transação
+        // apontar para wallet inexistente. Fica como guarda, e não como `?? `,
+        // porque seguir sem wallet seria decidir uma reversão sem saldo nenhum.
+        throw new WalletNotFoundError(candidate.walletId);
+      }
+
+      // Relê **sob o lock**. É esta segunda leitura que impede dois workers de
+      // resolverem a mesma transação: o segundo espera o `FOR UPDATE` do primeiro,
+      // e quando entra já enxerga o commit dele. Mesma lição de E-10 — quem
+      // garante correção é o lock dentro da transação, não a varredura, que
+      // deliberadamente não trava nada.
+      const transaction = await repos.transactions.findById(transactionId);
+
+      if (
+        transaction === undefined ||
+        transaction.status !== WagerTransactionStatus.PendingReference
+      ) {
+        // Outro worker chegou primeiro, ou a linha sumiu. Nada a fazer e —
+        // importante — nada a reagendar: o status devolvido já diz isso.
+        return transaction?.status;
+      }
+
+      const kind = transaction.kind;
+
+      if (!isReversalKind(kind)) {
+        throw new UnresolvablePendingReferenceError(transaction.id, kind);
+      }
+
+      const decided = await this.decideReversal(
+        repos,
+        wallet,
+        transaction,
+        transaction.money,
+        kind,
+        now,
+      );
+
+      if (decided.outcome === "pending-reference") {
+        // Dentro do prazo: a referência ainda pode chegar (RN-15). **Nada é
+        // escrito aqui** — o reagendamento é estado operacional e sai por `UPDATE`
+        // direto no worker (D-052), fora do agregado e fora desta transação.
+        if (transaction.createdAt > deadline) {
+          return WagerTransactionStatus.PendingReference;
+        }
+
+        // TTL de D-008 esgotado. A espera vira rejeição terminal e auditável, com
+        // o código que manda o provedor parar de esperar (RF-26, D-007).
+        const expired = this.rejectWith(
+          transaction,
+          wallet,
+          BusinessFailureCode.ReferenceNotFound,
+        );
+
+        await this.settle(repos, transaction, wallet, expired, now);
+
+        return transaction.status;
+      }
+
+      await this.settle(repos, transaction, wallet, decided, now);
+
+      return transaction.status;
+    });
+  }
+
+  /**
+   * Persiste o desfecho de uma transação **que já existe** (RF-23, RF-25).
+   *
+   * Espelho do trecho final de `process()`, com `update` no lugar do `insert` e
+   * sem inbox: a resolução de RF-26 não vem de entrega nenhuma. A ordem é a mesma
+   * — transação, saldo, lançamento, eventos —, e por isso o lançamento nunca
+   * referencia uma linha que ainda não foi escrita.
+   *
+   * A correlação vem da própria transação (D-055). Linha anterior à `m0003` não
+   * tem correlação guardada e cai no id gerado, que é o fallback de D-039: sem
+   * ele, o desfecho sairia sem rastro nenhum. O `causationId` é a transação —
+   * quem causou este evento foi ela, ao ser resolvida.
+   */
+  private async settle(
+    repos: TransactionalRepositories,
+    transaction: WagerTransaction,
+    wallet: Wallet,
+    result: TransactionOutcome,
+    now: Date,
+  ): Promise<void> {
+    await repos.transactions.update(transaction);
+
+    if (result.outcome === "processed" && result.entry !== undefined) {
+      await repos.wallets.update(wallet);
+      await repos.ledger.insert(result.entry);
+    }
+
+    await this.enqueueEvents(
+      repos,
+      {
+        correlationId: transaction.correlationId ?? this.ids.next(),
+        causationId: transaction.id,
+      },
+      transaction,
+      wallet,
+      result,
+      now,
+    );
+  }
+
+  /**
    * Devolve o resultado original de uma key já registrada (RN-12, RN-14).
    *
    * Payload divergente é conflito, não replay. Igual, devolve o desfecho como
@@ -234,10 +407,11 @@ export class ProcessWagerTransaction {
     return {
       transactionId: existing.id,
       status: existing.status,
-      // `observedBalance` só é `undefined` em transação sem desfecho, que hoje
-      // significa `PENDING_REFERENCE` — estado que `BET` não alcança e cuja
-      // resposta de RN-15 é definida em E-13. Até lá, o saldo corrente da wallet
-      // travada é a única leitura honesta disponível.
+      // `observedBalance` só é `undefined` em transação sem desfecho, que
+      // significa `PENDING_REFERENCE`. Por D-053, a resposta `202` de RN-15
+      // devolve o saldo **corrente** da wallet travada: não há desfecho a
+      // preservar, e congelar um saldo aqui daria à espera a aparência de um
+      // resultado que ela não é.
       balance: (existing.observedBalance ?? wallet.balance).toJSON(),
       idempotentReplay: true,
       ...(existing.failureCode === undefined ? {} : { failureCode: existing.failureCode }),
@@ -274,17 +448,31 @@ export class ProcessWagerTransaction {
       ...(command.referenceExternalTransactionId === undefined
         ? {}
         : { referenceExternalTransactionId: command.referenceExternalTransactionId }),
+      // Guardada na linha (D-055): quando esta transação for um `REFUND`/`ROLLBACK`
+      // que fica esperando, o evento do desfecho vai ser publicado pelo worker de
+      // RF-26 — fora desta requisição, e sem outra fonte de correlação.
+      correlationId: command.correlationId,
       createdAt: now,
     });
 
     const result = await this.decide(repos, wallet, transaction, money, now);
 
+    // A transição para `PENDING_REFERENCE` acontece **aqui**, e não dentro de
+    // `decideReversal`, porque o mesmo desfecho tem dois chamadores com origens
+    // diferentes: uma transação nova precisa sair de `PENDING`, e a que o worker
+    // de RF-26 relê já **está** em `PENDING_REFERENCE`. D-013 não tem self-loop,
+    // então re-marcá-la lançaria. Quem sabe de onde a transação vem é quem
+    // transiciona; `decideReversal` só decide.
+    if (result.outcome === "pending-reference") {
+      transaction.markPendingReference();
+    }
+
     // Um único `insert`, já no estado final desta passagem: a decisão inteira
     // acontece dentro desta transação SQL, então não existe instante em que
     // alguém possa observar a linha em `PENDING`. Inserir e depois atualizar
     // custaria um comando a mais para representar um estado que ninguém consegue
-    // ler. `PENDING_REFERENCE` é o único desfecho não terminal, e é E-13 quem o
-    // resolve depois (RF-26).
+    // ler. `PENDING_REFERENCE` é o único desfecho não terminal, e quem o resolve
+    // depois é `resolvePendingReference`, chamado pelo worker de RF-26.
     await repos.transactions.insert(transaction);
 
     // `entry === undefined` é `LOSS` (RN-03): transação aplicada, saldo intacto,
@@ -303,8 +491,8 @@ export class ProcessWagerTransaction {
       status: transaction.status,
       // `undefined` só em `PENDING_REFERENCE`: `markPendingReference` não observa
       // saldo (D-030), porque aguardar referência não é desfecho. Nesse caso vale
-      // o saldo corrente da wallet travada, e é E-13 quem decide a forma final da
-      // resposta de RN-15. Nos outros dois, `markProcessed`/`reject` já gravaram.
+      // o saldo corrente da wallet travada (D-053). Nos outros dois,
+      // `markProcessed`/`reject` já gravaram.
       balance: (transaction.observedBalance ?? wallet.balance).toJSON(),
       idempotentReplay: false,
       ...(result.outcome === "rejected" ? { failureCode: result.failureCode } : {}),
@@ -404,8 +592,6 @@ export class ProcessWagerTransaction {
     // RN-15: a referência pode simplesmente ainda não ter chegado. Não é
     // rejeição — a transação espera e o worker de RF-26 a resolve.
     if (reference === undefined) {
-      transaction.markPendingReference();
-
       return { outcome: "pending-reference" };
     }
 
@@ -414,8 +600,6 @@ export class ProcessWagerTransaction {
     // aguardando (cadeia fora de ordem); uma em `REJECTED`/`FAILED` é terminal
     // por D-013 e nunca vai ser reversível.
     if (reference.status === WagerTransactionStatus.PendingReference) {
-      transaction.markPendingReference();
-
       return { outcome: "pending-reference" };
     }
 
@@ -568,7 +752,7 @@ export class ProcessWagerTransaction {
    */
   private async enqueueEvents(
     repos: TransactionalRepositories,
-    command: ProcessWagerTransactionCommand,
+    trace: EventTrace,
     transaction: WagerTransaction,
     wallet: Wallet,
     result: TransactionOutcome,
@@ -580,7 +764,7 @@ export class ProcessWagerTransaction {
         WagerTransactionRejected.from(
           transaction,
           result.failureCode,
-          this.contextFor(command, now),
+          this.contextFor(trace, now),
         ),
       );
 
@@ -590,7 +774,7 @@ export class ProcessWagerTransaction {
     if (result.outcome === "pending-reference") {
       await this.enqueue(
         repos,
-        WagerTransactionPendingReference.from(transaction, this.contextFor(command, now)),
+        WagerTransactionPendingReference.from(transaction, this.contextFor(trace, now)),
       );
 
       return;
@@ -598,7 +782,7 @@ export class ProcessWagerTransaction {
 
     await this.enqueue(
       repos,
-      WagerTransactionProcessed.from(transaction, this.contextFor(command, now)),
+      WagerTransactionProcessed.from(transaction, this.contextFor(trace, now)),
     );
 
     if (result.entry === undefined) {
@@ -609,7 +793,7 @@ export class ProcessWagerTransaction {
 
     await this.enqueue(
       repos,
-      WalletBalanceChanged.from(wallet, result.entry, this.contextFor(command, now)),
+      WalletBalanceChanged.from(wallet, result.entry, this.contextFor(trace, now)),
     );
   }
 
@@ -622,11 +806,11 @@ export class ProcessWagerTransaction {
   }
 
   /** Contexto de rastreio de um evento — `eventId` novo, correlação de quem chamou. */
-  private contextFor(command: ProcessWagerTransactionCommand, now: Date): EventContext {
+  private contextFor(trace: EventTrace, now: Date): EventContext {
     return {
       eventId: this.ids.next(),
-      correlationId: command.correlationId,
-      ...(command.causationId === undefined ? {} : { causationId: command.causationId }),
+      correlationId: trace.correlationId,
+      ...(trace.causationId === undefined ? {} : { causationId: trace.causationId }),
       occurredAt: now,
     };
   }

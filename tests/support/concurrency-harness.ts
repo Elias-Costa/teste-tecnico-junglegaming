@@ -82,6 +82,7 @@ export async function semearCarteira(orm: MikroORM, amount: string): Promise<Car
     externalTransactionId: unico("ext-opening"),
     idempotencyKey: unico("idem-opening"),
     payloadHash: "0".repeat(64),
+    correlationId: unico("corr-opening"),
     walletId,
     playerId: wallet.playerId,
     roundId: unico("round-opening"),

@@ -127,7 +127,13 @@ export class OpenWallet {
       // exatamente esse caso — e o `CHECK (amount > 0)` do schema confirma que
       // uma `OPENING` de valor zero nunca poderia ser gravada.
       if (openingEntry !== undefined) {
-        const transaction = this.openingTransactionFor(wallet, openingEntry, initialBalance, now);
+        const transaction = this.openingTransactionFor(
+          wallet,
+          openingEntry,
+          initialBalance,
+          command.correlationId,
+          now,
+        );
 
         await repos.transactions.insert(transaction);
         await repos.ledger.insert(openingEntry);
@@ -163,6 +169,7 @@ export class OpenWallet {
     wallet: Wallet,
     openingEntry: WalletLedgerEntry,
     initialBalance: Money,
+    correlationId: string,
     now: Date,
   ): WagerTransaction {
     const payloadHash = payloadHashOf({
@@ -188,6 +195,12 @@ export class OpenWallet {
       gameId: INTERNAL_GAME_ID,
       kind: WagerTransactionKind.Opening,
       money: initialBalance,
+      // A correlação da requisição de abertura fica guardada na linha (D-055). A
+      // `OPENING` nunca vai parar no worker de RF-26, mas a coluna só é nulável
+      // por causa das linhas anteriores à `m0003`: todo `insert` novo a preenche,
+      // inclusive o do produtor interno. Um caminho de escrita só se defende
+      // melhor do que uma exceção para a abertura.
+      correlationId,
       createdAt: now,
     });
 

@@ -1,6 +1,7 @@
 import type { MigrationObject } from "@mikro-orm/core";
 import { M0001InitialSchema } from "./m0001-initial-schema.ts";
 import { M0002ObservedBalance } from "./m0002-observed-balance.ts";
+import { M0003CorrelationId } from "./m0003-correlation-id.ts";
 
 /**
  * Lista explícita de migrations, na ordem de aplicação.
@@ -18,4 +19,5 @@ import { M0002ObservedBalance } from "./m0002-observed-balance.ts";
 export const MIGRATIONS: readonly MigrationObject[] = [
   { name: "M0001InitialSchema", class: M0001InitialSchema },
   { name: "M0002ObservedBalance", class: M0002ObservedBalance },
+  { name: "M0003CorrelationId", class: M0003CorrelationId },
 ];

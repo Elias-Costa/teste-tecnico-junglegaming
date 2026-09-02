@@ -13,9 +13,9 @@
  *    por engano converteria para ponto flutuante sem lançar nada (D-004).
  *  - **EL-07** — ler um lançamento do ledger não deixa entidade rastreada, então
  *    nenhum `flush` pode emitir `UPDATE` sobre a tabela imutável (D-023, D-028).
- *  - **D-029** — `reference_attempts` e `next_reference_attempt_at` continuam
- *    intocadas depois de `insert` e de `update`, porque o repositório não as
- *    escreve.
+ *  - **D-029 / D-052** — `reference_attempts` e `next_reference_attempt_at`
+ *    continuam intocadas depois de `insert` e de `update`, porque o repositório
+ *    do agregado não as escreve: quem as escreve é o `PendingReferenceStore`.
  *
  * As escritas acontecem dentro de `em.transactional()` e as leituras num `em`
  * novo: assim a comparação é sempre contra o que o banco guardou, nunca contra
@@ -127,6 +127,7 @@ function newTransaction(
     externalTransactionId: unique("ext"),
     idempotencyKey: unique("idem"),
     payloadHash: HASH,
+    correlationId: unique("corr"),
     walletId,
     playerId,
     roundId: unique("round"),
@@ -172,6 +173,7 @@ async function seedWallet(amount = "100.00"): Promise<WalletSeed> {
     externalTransactionId: unique("ext"),
     idempotencyKey: unique("idem"),
     payloadHash: HASH,
+    correlationId: unique("corr"),
     walletId,
     playerId,
     roundId: unique("round"),
@@ -309,6 +311,9 @@ describe("round-trip de WagerTransaction (RF-03)", () => {
     expect(lida?.money.equals(brl("25.00"))).toBe(true);
     expect(lida?.status).toBe(WagerTransactionStatus.Pending);
     expect(lida?.createdAt.getTime()).toBe(ABERTURA.getTime());
+    // D-055: a correlação vai e volta pela `m0003`. É ela que o worker de RF-26
+    // relê para publicar o desfecho de uma pendente com o rastro da submissão.
+    expect(lida?.correlationId).toBe(aposta.correlationId);
     // Ausência no banco é `NULL`; no domínio é `undefined`. O mapper traduz.
     expect(lida?.referenceExternalTransactionId).toBeUndefined();
     expect(lida?.failureCode).toBeUndefined();
@@ -328,6 +333,7 @@ describe("round-trip de WagerTransaction (RF-03)", () => {
       externalTransactionId: unique("ext"),
       idempotencyKey: unique("idem"),
       payloadHash: HASH,
+      correlationId: unique("corr"),
       walletId: wallet.id,
       playerId: wallet.playerId,
       roundId: unique("round"),
@@ -390,7 +396,7 @@ describe("round-trip de WagerTransaction (RF-03)", () => {
     expect(lida?.observedBalance?.equals(brl("50.00"))).toBe(true);
   });
 
-  it("não escreve as colunas de retry de referência (D-029)", async () => {
+  it("não escreve as colunas de retry de referência (D-029, D-052)", async () => {
     const { wallet } = await seedWallet();
     const aposta = newTransaction(wallet.id, wallet.playerId, WagerTransactionKind.Bet, "10.00");
 
@@ -411,7 +417,8 @@ describe("round-trip de WagerTransaction (RF-03)", () => {
 
     // O `insert` omite as colunas e vale o default da tabela; o `update` escreve
     // a lista fechada de `WagerTransactionUpdate` e não passa por elas. É o que
-    // vai impedir um `update` de status de apagar o trabalho do worker de E-13.
+    // impede um `update` de status de apagar o reagendamento do worker de RF-26 —
+    // a outra metade da prova está em `pending-reference-worker.test.ts`.
     expect(depoisDoInsert[0]?.reference_attempts).toBe(0);
     expect(depoisDoInsert[0]?.next_reference_attempt_at).toBeNull();
     expect(depoisDoUpdate[0]?.reference_attempts).toBe(0);

@@ -13,14 +13,14 @@
  * não dinheiro — e `Math.random()` é justamente a fonte de jitter que D-022
  * mandou injetar na entidade, que não pode buscá-la sozinha.
  *
- * **Escopo atual:** os parâmetros do loop da outbox (RF-24) e os do consumidor
- * SQS (RF-21), estes acrescentados em E-11 — incluindo o `maxReceiveCount` da
- * tabela de D-008. Falta só o TTL de `PENDING_REFERENCE`, que entra **neste
- * mesmo módulo** em E-13; escrevê-lo agora seria código sem consumidor.
+ * **Escopo:** os três loops de D-008 — a publicação da outbox (RF-24), o
+ * consumidor SQS (RF-21, com o `maxReceiveCount` da tabela) e o worker de
+ * referências fora de ordem (RF-26), cujo TTL de 15 min é o único parâmetro que
+ * a tabela de D-008 nomeia por extenso.
  *
- * Os dois loops têm números próprios e **uma fórmula só**: a curva de equal
- * jitter mora em `backoffDelayMs` (`src/domain/retry-policy.ts`), e é isso que
- * D-008 quer dizer com uma curva, não uma por loop.
+ * Os três têm números próprios e **uma fórmula só**: a curva de equal jitter mora
+ * em `backoffDelayMs` (`src/domain/retry-policy.ts`), e é isso que D-008 quer
+ * dizer com uma curva, não uma por loop.
  */
 import { backoffDelayMs, type RetryPolicy } from "../../domain/retry-policy.ts";
 
@@ -71,6 +71,25 @@ export interface RetryEnv {
   consumerBaseDelayMs: number;
   /** Teto do backoff do consumidor. A curva satura aqui. */
   consumerMaxDelayMs: number;
+
+  /**
+   * Quanto tempo uma reversão espera pela referência antes de ser rejeitada
+   * (RF-26, D-008). Default 15 min.
+   *
+   * **Expresso em tempo, e não em contagem de tentativas**, porque a pergunta de
+   * negócio é "quanto tempo esperamos a `BET` chegar depois do `ROLLBACK`", não
+   * "quantas vezes tentamos". O contador de `reference_attempts` existe para
+   * alimentar a curva do backoff, não para decidir a desistência.
+   */
+  pendingReferenceTtlMs: number;
+  /** Atraso da primeira revarredura de uma pendente, antes do jitter. */
+  pendingReferenceBaseDelayMs: number;
+  /** Teto do backoff do worker de referências. A curva satura aqui. */
+  pendingReferenceMaxDelayMs: number;
+  /** Quantas pendentes o worker examina por ciclo. */
+  pendingReferenceBatchSize: number;
+  /** Intervalo entre ciclos quando não há pendente devida. */
+  pendingReferencePollIntervalMs: number;
 }
 
 /** Defaults de D-008, em um lugar só para que o teste possa citá-los. */
@@ -87,6 +106,11 @@ const DEFAULTS: RetryEnv = {
   consumerBatchSize: 10,
   consumerBaseDelayMs: 1_000,
   consumerMaxDelayMs: 300_000,
+  pendingReferenceTtlMs: 900_000,
+  pendingReferenceBaseDelayMs: 1_000,
+  pendingReferenceMaxDelayMs: 300_000,
+  pendingReferenceBatchSize: 10,
+  pendingReferencePollIntervalMs: 1_000,
 };
 
 /**
@@ -131,6 +155,26 @@ export function readRetryEnv(): RetryEnv {
       process.env.CONSUMER_MAX_DELAY_MS,
       DEFAULTS.consumerMaxDelayMs,
     ),
+    pendingReferenceTtlMs: positiveInt(
+      process.env.PENDING_REFERENCE_TTL_MS,
+      DEFAULTS.pendingReferenceTtlMs,
+    ),
+    pendingReferenceBaseDelayMs: positiveInt(
+      process.env.PENDING_REFERENCE_BASE_DELAY_MS,
+      DEFAULTS.pendingReferenceBaseDelayMs,
+    ),
+    pendingReferenceMaxDelayMs: positiveInt(
+      process.env.PENDING_REFERENCE_MAX_DELAY_MS,
+      DEFAULTS.pendingReferenceMaxDelayMs,
+    ),
+    pendingReferenceBatchSize: positiveInt(
+      process.env.PENDING_REFERENCE_BATCH_SIZE,
+      DEFAULTS.pendingReferenceBatchSize,
+    ),
+    pendingReferencePollIntervalMs: positiveInt(
+      process.env.PENDING_REFERENCE_POLL_INTERVAL_MS,
+      DEFAULTS.pendingReferencePollIntervalMs,
+    ),
   };
 }
 
@@ -162,6 +206,23 @@ export function consumerRetryPolicy(env: RetryEnv = readRetryEnv()): RetryPolicy
   return {
     baseDelayMs: env.consumerBaseDelayMs,
     maxDelayMs: env.consumerMaxDelayMs,
+    random: () => Math.random(),
+  };
+}
+
+/**
+ * Monta a `RetryPolicy` do worker de referências fora de ordem (RF-26, D-022).
+ *
+ * **Terceiro consumidor da mesma curva**, e é aqui que D-008 se paga: os três
+ * loops esperam por motivos diferentes — fila fora, banco fora, e uma `BET` que
+ * ainda não chegou —, mas nenhum deles reescreve `backoffDelayMs`. O jitter
+ * importa em cheio neste: sem ele, três instâncias varreriam as mesmas pendentes
+ * no mesmo instante e disputariam o lock da wallet à toa (RI-08).
+ */
+export function pendingReferenceRetryPolicy(env: RetryEnv = readRetryEnv()): RetryPolicy {
+  return {
+    baseDelayMs: env.pendingReferenceBaseDelayMs,
+    maxDelayMs: env.pendingReferenceMaxDelayMs,
     random: () => Math.random(),
   };
 }

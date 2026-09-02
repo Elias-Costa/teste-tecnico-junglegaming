@@ -17,8 +17,11 @@ import type {
  * **Colunas nuláveis são `| null`, não opcionais.** `null` é o valor da coluna,
  * e escrevê-lo explicitamente mantém o `insert` com forma única. As **únicas**
  * propriedades opcionais desta linha são as duas colunas de retry de referência,
- * e isso é o tipo dizendo o que D-029 decidiu: elas não têm dono no domínio e o
- * repositório não as escreve.
+ * e isso é o tipo dizendo o que D-029 decidiu e D-052 confirmou: o repositório do
+ * agregado não as escreve, para que o `insert` as omita e os defaults da tabela
+ * valham. Quem as manipula é o `PendingReferenceStore`, por `UPDATE` direto — e
+ * é por elas serem opcionais **na escrita** que a leitura delas volta como
+ * `| undefined`, que aquele store trata explicitamente.
  */
 export interface WagerTransactionRow {
   id: string;
@@ -47,9 +50,16 @@ export interface WagerTransactionRow {
   observedBalance: string | null;
   /** Moeda do saldo observado — a **da wallet**, que pode divergir de `currency` (D-030). */
   observedBalanceCurrency: string | null;
-  /** Sem dono no domínio (D-029) — o repositório nunca lê nem escreve. */
+  /**
+   * Correlação da submissão que criou a transação (D-055, `m0003`).
+   *
+   * Nula apenas em linha gravada **antes** da `m0003`: todo `insert` daqui em
+   * diante preenche a coluna. Quem lê e encontra nulo cai no fallback de D-039.
+   */
+  correlationId: string | null;
+  /** Estado operacional do worker de RF-26 (D-052) — o repositório do agregado não toca. */
   referenceAttempts?: number;
-  /** Sem dono no domínio (D-029) — o repositório nunca lê nem escreve. */
+  /** Estado operacional do worker de RF-26 (D-052) — o repositório do agregado não toca. */
   nextReferenceAttemptAt?: Date | null;
   createdAt: Date;
   processedAt: Date | null;
@@ -111,8 +121,17 @@ export const wagerTransactionRowSchema = new EntitySchema<WagerTransactionRow>({
       fieldName: "observed_balance_currency",
       nullable: true,
     },
+    correlationId: {
+      type: "string",
+      // 128, e não os 120 dos identificadores de negócio: a correlação é um valor
+      // do provedor, e a forma aceita por D-039 admite esse comprimento.
+      columnType: "varchar(128)",
+      fieldName: "correlation_id",
+      nullable: true,
+    },
     // Declaradas para que o mapeamento continue sendo espelho fiel da tabela,
-    // mas fora do alcance do repositório por D-029.
+    // mas fora do alcance do repositório por D-029/D-052 — quem as escreve é o
+    // `PendingReferenceStore`, por `UPDATE` direto.
     referenceAttempts: {
       type: "integer",
       columnType: "integer",

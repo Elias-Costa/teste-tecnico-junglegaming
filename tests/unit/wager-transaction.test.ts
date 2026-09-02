@@ -37,6 +37,7 @@ const props = (
   playerId: "player-1",
   roundId: "round-1",
   gameId: "game-1",
+  correlationId: "corr-1",
   kind: WagerTransactionKind.Bet,
   money: Money.from({ amount: "80.00", currency: "BRL" }),
   createdAt: EM,
@@ -253,6 +254,46 @@ describe("WagerTransaction.create — nascimento e referência (RF-03, RN-06, D-
     });
 
     expect(transacao.status).toBe(WagerTransactionStatus.Rejected);
+  });
+});
+
+describe("WagerTransaction — correlação guardada na linha (D-055, RNF-06)", () => {
+  it("create exige a correlação e a preserva imutável", () => {
+    const transacao = WagerTransaction.create(props({ correlationId: "corr-do-provedor" }));
+
+    // Guardá-la é o que permite ao worker de RF-26 publicar o desfecho de uma
+    // `PENDING_REFERENCE` **com o mesmo rastro** da submissão que a criou, minutos
+    // depois e fora de qualquer requisição.
+    expect(transacao.correlationId).toBe("corr-do-provedor");
+
+    transacao.markProcessed(undefined, SALDO, EM);
+
+    expect(transacao.correlationId).toBe("corr-do-provedor");
+  });
+
+  it("rehydrate aceita a ausência: linha anterior à m0003 não tem a coluna", () => {
+    const transacao = WagerTransaction.rehydrate({
+      ...props(),
+      // `undefined` explícito, e não desestruturação: `WagerTransactionState`
+      // declara o campo como opcional exatamente para representar esta linha.
+      correlationId: undefined,
+      status: WagerTransactionStatus.PendingReference,
+    });
+
+    // O `undefined` é o que faz `settle` cair no fallback de D-039 em vez de
+    // publicar um evento com correlação vazia.
+    expect(transacao.correlationId).toBeUndefined();
+  });
+
+  it("correlação diferente com o mesmo payload continua sendo replay (RN-12, RN-14)", () => {
+    const original = WagerTransaction.create(props({ correlationId: "corr-1" }));
+    const reenvio = WagerTransaction.create(props({ correlationId: "corr-2" }));
+
+    // A correlação **não** entra no `payloadHash` (D-005): a lista canônica tem 10
+    // campos de negócio, e a §9 proíbe metadado de transporte ali. Se entrasse, o
+    // segundo envio da mesma aposta viraria `IDEMPOTENCY_CONFLICT` só por o
+    // provedor ter gerado um id de rastro novo.
+    expect(original.matchesPayload(reenvio.payloadHash)).toBe(true);
   });
 });
 

@@ -7,10 +7,11 @@ import type { WagerTransactionRow } from "../rows/wager-transaction-row.ts";
  *
  * São exatamente as que as transições de `WagerTransaction` alteram — incluindo
  * o par do saldo observado, escrito por `markProcessed` e `reject` (D-030).
- * Identidade e payload são imutáveis do nascimento ao terminal, e
- * `reference_attempts`/`next_reference_attempt_at` estão fora por D-029 — a
- * ausência delas neste `Pick` é o que garante que um `update` de status não
- * apague o trabalho do worker de E-13.
+ * Identidade e payload são imutáveis do nascimento ao terminal — `correlationId`
+ * entre eles (D-055) —, e `reference_attempts`/`next_reference_attempt_at` estão
+ * fora por D-029/D-052: a ausência delas neste `Pick` é o que garante que um
+ * `update` de status **não apague** o reagendamento que o worker de RF-26
+ * acabou de escrever pelo outro caminho.
  */
 export type WagerTransactionUpdate = Pick<
   WagerTransactionRow,
@@ -48,8 +49,10 @@ function toObservedBalanceColumns(
  * Converte a transação para a linha completa, para `insert`.
  *
  * O objeto devolvido **omite** `referenceAttempts` e `nextReferenceAttemptAt`
- * (D-029): omitidas do `insert`, valem os defaults da tabela — `0` e nulo.
- * Escrevê-las aqui seria a aplicação assumindo um dono que ela não tem.
+ * (D-029, D-052): omitidas do `insert`, valem os defaults da tabela — `0` e nulo.
+ * É delas que a varredura de RF-26 depende: uma pendente **nasce** com o
+ * agendamento nulo, e é por isso que `PendingReferenceStore.findDue` trata o nulo
+ * como devida em vez de ignorá-lo.
  */
 export function toWagerTransactionRow(transaction: WagerTransaction): WagerTransactionRow {
   const money = moneyToColumns(transaction.money);
@@ -70,6 +73,7 @@ export function toWagerTransactionRow(transaction: WagerTransaction): WagerTrans
     status: transaction.status,
     referenceExternalTransactionId: transaction.referenceExternalTransactionId ?? null,
     referenceTransactionId: transaction.referenceTransactionId ?? null,
+    correlationId: transaction.correlationId ?? null,
     ...toObservedBalanceColumns(transaction),
     failureCode: transaction.failureCode ?? null,
     createdAt: transaction.createdAt,
@@ -113,6 +117,7 @@ export function toWagerTransaction(row: WagerTransactionRow): WagerTransaction {
     kind: row.kind,
     money: moneyFromColumns(row.amount, row.currency),
     referenceExternalTransactionId: row.referenceExternalTransactionId ?? undefined,
+    correlationId: row.correlationId ?? undefined,
     createdAt: row.createdAt,
     status: row.status,
     referenceTransactionId: row.referenceTransactionId ?? undefined,

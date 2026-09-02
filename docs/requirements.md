@@ -187,6 +187,10 @@ Submete uma operação de aposta.
 - Limite de tentativas ou TTL definido e justificado. `[DECIDIDO: D-008]` — **TTL de 15 min**, expresso em tempo e não em contagem de tentativas: a pergunta de negócio é quanto tempo se espera a referência chegar.
 - Esgotado o limite: `REJECTED` com `failureCode` que identifique a referência inexistente, e **evento correspondente publicado**.
 
+`[DECIDIDO: D-052]` — **o contador e o agendamento são estado operacional**, escritos por `UPDATE` direto no `PendingReferenceStore` e fora do `Pick` do repositório do agregado. É o que faz um `update` de status e um reagendamento tocarem a mesma linha sem um apagar o outro. Lacuna que D-029 deixou explicitamente em aberto para esta etapa.
+
+`[DECIDIDO: D-054]` — **a re-resolução reusa o mesmo use case** (`ProcessWagerTransaction.resolvePendingReference`), pelo argumento de RF-18: duas implementações da decisão de reversão divergiriam justamente onde a divergência move dinheiro. O worker varre, chama e reagenda — não tem regra de negócio.
+
 ---
 
 ## 3. Regras de Negócio (§7 do enunciado)
@@ -221,7 +225,7 @@ Submete uma operação de aposta.
 
 **RN-14** — A mesma idempotency key com payload diferente é **conflito**, não replay.
 
-**RN-15** — Referência ausente → persistir como `PENDING_REFERENCE` e reprocessar depois (RF-26). Não é rejeição imediata.
+**RN-15** — Referência ausente → persistir como `PENDING_REFERENCE` e reprocessar depois (RF-26). Não é rejeição imediata. `[DECIDIDO: D-053]` — o `balance` da resposta `202` é o **saldo corrente da wallet travada**, e `observed_balance` continua nulo: RN-12 fala do saldo do **desfecho**, e aguardar referência não é desfecho. Pendência que D-030 abriu e adiou para esta etapa.
 
 **RN-16** — Reversão que produziria saldo negativo é **rejeitada explicitamente**, com um `failureCode` **distinto** do de uma aposta sem saldo — são situações operacionalmente diferentes — e permanece auditável.
 

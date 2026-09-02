@@ -33,9 +33,11 @@ export enum WagerTransactionStatus {
  *
  * - **sem self-loop e sem volta para `PENDING`**: o reagendamento de uma
  *   referência ausente é `UPDATE` nas colunas `reference_attempts` e
- *   `next_reference_attempt_at` (E-05), não transição. Status é estado de
- *   negócio; contador de tentativa é dado operacional, e misturar os dois
- *   esconderia um contador dentro do grafo.
+ *   `next_reference_attempt_at` (E-05), não transição — é o que D-052 confirmou
+ *   ao dar essas colunas ao `PendingReferenceStore`. Status é estado de negócio;
+ *   contador de tentativa é dado operacional, e misturar os dois esconderia um
+ *   contador dentro do grafo. A consequência direta aparece em `resolvePendingReference`:
+ *   quem relê uma pendente **não** a re-marca, porque a transição não existe.
  * - **terminal é "não tem saída"**: `isTerminal()` lê deste mesmo mapa em vez de
  *   manter uma segunda lista de status terminais, que poderia divergir dele.
  */
@@ -83,11 +85,34 @@ export interface CreateWagerTransactionProps {
   money: Money;
   /** Id **no provedor** da transação referenciada, não o id interno (RN-07). */
   referenceExternalTransactionId?: string | undefined;
+  /**
+   * Correlação de ponta a ponta da submissão que criou esta transação (RNF-06, D-055).
+   *
+   * Guardada na transação porque **nem todo evento dela nasce numa requisição**:
+   * o worker de RF-26 resolve uma `PENDING_REFERENCE` minutos depois, fora de
+   * qualquer chamada, e sem este campo o evento daquele desfecho teria de
+   * inventar uma correlação — rompendo o rastro justamente no ponto mais difícil
+   * de reconstruir depois.
+   *
+   * **Não participa do `payloadHash`** (D-005): a lista canônica tem 10 campos de
+   * negócio, e a §9 do enunciado proíbe metadado de transporte no hash. Dois
+   * reenvios do mesmo payload com correlações diferentes continuam sendo o mesmo
+   * replay (RN-12).
+   */
+  correlationId: string;
   createdAt: Date;
 }
 
-/** Estado persistido: a identidade acima mais o que as transições escrevem. */
-export interface WagerTransactionState extends CreateWagerTransactionProps {
+/**
+ * Estado persistido: a identidade acima mais o que as transições escrevem.
+ *
+ * `correlationId` é o único campo que afrouxa na volta, e o `Omit` diz por quê:
+ * toda transação **criada** carrega correlação, mas uma linha gravada antes da
+ * `m0003` não tem a coluna preenchida, e `rehydrate` não revalida nada (§6.0).
+ */
+export interface WagerTransactionState
+  extends Omit<CreateWagerTransactionProps, "correlationId"> {
+  correlationId?: string | undefined;
   status: WagerTransactionStatus;
   /** Id **interno** da referência, resolvido no processamento (RN-07). */
   referenceTransactionId?: string | undefined;
@@ -122,6 +147,8 @@ export class WagerTransaction {
   public readonly kind: WagerTransactionKind;
   public readonly money: Money;
   public readonly referenceExternalTransactionId: string | undefined;
+  /** Correlação da submissão que a criou (D-055). Ausente em linha anterior à `m0003`. */
+  public readonly correlationId: string | undefined;
   public readonly createdAt: Date;
 
   private _status: WagerTransactionStatus;
@@ -150,6 +177,7 @@ export class WagerTransaction {
     this.kind = state.kind;
     this.money = state.money;
     this.referenceExternalTransactionId = state.referenceExternalTransactionId;
+    this.correlationId = state.correlationId;
     this.createdAt = state.createdAt;
     this._status = state.status;
     this._referenceTransactionId = state.referenceTransactionId;
@@ -238,9 +266,10 @@ export class WagerTransaction {
    * já em `PENDING_REFERENCE` lança, porque o reagendamento do worker de E-13 é
    * `UPDATE` nas colunas de tentativa, não uma transição repetida.
    *
-   * **Não observa saldo** (D-030): aguardar referência não é desfecho, e a
-   * transação ainda vai passar por `markProcessed` ou `reject` — quem define o
-   * saldo da resposta de RN-15 é E-13, quando decidir a forma do `202`.
+   * **Não observa saldo** (D-030, D-053): aguardar referência não é desfecho, e a
+   * transação ainda vai passar por `markProcessed` ou `reject`. A resposta `202`
+   * de RN-15 devolve o saldo **corrente** da wallet travada, e não um congelado
+   * aqui — não há desfecho ainda a preservar.
    *
    * @throws InvalidTransactionStateError se o status atual não permitir.
    */

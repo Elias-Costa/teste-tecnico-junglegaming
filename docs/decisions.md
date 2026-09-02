@@ -24,15 +24,17 @@ Registro leve de decisões, estilo ADR. Neste projeto ele tem **três** funçõe
 
 ## Fila de decisões em aberto
 
-**Um item, que só bloqueia E-13.**
+**Vazia.** O único item — o dono de `reference_attempts` e `next_reference_attempt_at`, aberto por **D-029** — foi fechado por **D-052** em 2026-09-02, antes de o worker de E-13 ser escrito. As duas colunas são estado operacional, manipulado por `UPDATE` direto no `PendingReferenceStore`.
 
-- **Dono de `reference_attempts` e `next_reference_attempt_at`** — aberto por **D-029**. As duas colunas existem no schema desde E-05 e não têm dono no domínio. E-13 escolhe entre levá-las ao agregado (um `scheduleReferenceRetry(now, policy)` reusando o `RetryPolicy` de D-022) ou tratá-las como estado operacional manipulado por `UPDATE` direto, como o lease da outbox em E-10. **Nada até E-12 depende disso:** por D-029, o repositório de E-06 simplesmente não escreve essas colunas, e nenhuma das duas saídas fica mais cara por causa disso.
+A fila continuar vazia não significa que ela deixou de valer: toda etapa seguinte que expuser uma decisão não prevista **para** e a registra aqui antes de virar código (`AGENTS.md` §0).
 
-As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito, **D-033** a **D-039**, expostas por E-08 e resolvidas antes de a borda HTTP ser escrita, **D-040** a **D-043**, expostas por E-10 e resolvidas antes de o worker ser escrito, **D-044** a **D-048**, expostas por E-11 e resolvidas antes de o consumidor ser escrito, e **D-049** a **D-051**, expostas por E-12 e resolvidas antes de os quatro kinds restantes serem escritos. **Nenhuma etapa até E-13 está bloqueada** — e o único item da fila é justamente o que E-13 precisa decidir.
+As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito, **D-033** a **D-039**, expostas por E-08 e resolvidas antes de a borda HTTP ser escrita, **D-040** a **D-043**, expostas por E-10 e resolvidas antes de o worker ser escrito, **D-044** a **D-048**, expostas por E-11 e resolvidas antes de o consumidor ser escrito, **D-049** a **D-051**, expostas por E-12 e resolvidas antes de os quatro kinds restantes serem escritos, e **D-052** a **D-055**, expostas por E-13 e resolvidas antes de o worker de referências ser escrito — entre elas **D-052**, que fecha o último item da fila. **Nenhuma etapa está bloqueada.**
 
 **E-09 foi a primeira etapa a não expor decisão nenhuma**, e vale registrar por quê: ela não escreveu código de produção. A prova de concorrência é só teste, e a estratégia que ela verifica — pessimistic `FOR UPDATE` por wallet — já estava decidida em **D-002** desde 2026-09-01. A forma de RT-17 (três processos de sistema operacional subindo o `AppModule` inteiro, em vez de três chamadas ao use case no mesmo processo) também não foi escolha: **RI-08** cobra literalmente "correta com múltiplas **instâncias da aplicação**", e EL-05 é "correta somente com uma instância". Uma etapa sem decisão nova é sinal de que as anteriores foram bem fechadas, não de que alguém deixou de perguntar.
 
-A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022); e como aconteceu em E-05, onde o próprio escopo da etapa registrava duas vias sem escolher entre elas (D-023) e onde **dois documentos já registrados divergiam** sobre a chave da inbox (D-025); e como aconteceu em E-06, onde a rejeição do Custom Type em D-004 já implicava a forma do mapeamento sem que ninguém a tivesse registrado (D-026); e como aconteceu em E-07, onde RN-12 pedia um saldo que **nenhuma coluna guardava** (D-030) e onde **D-007 e o schema de E-05 se contradiziam** sobre `WALLET_NOT_FOUND` (D-031); e como voltou a acontecer em E-08, a etapa que mais expôs decisões de uma vez — **sete** —, incluindo o caso em que **o schema de E-05 tornava impossível** a transação interna que RF-08 exige, por seis colunas NOT NULL sem valor natural na abertura (D-033), e o caso em que **a própria consequência de D-006 não cobria o caminho normal** que E-07 acabara de produzir (D-036); e como aconteceu de novo em E-10, onde o enunciado **nomeia as filas de entrada e nenhuma de saída** (D-040), onde o LocalStack sobe vazio e ninguém tinha o encargo de criar a fila (D-041), e onde **D-008 fixava um limite de tentativas sem dizer o que acontece depois dele** (D-042, que a emenda); e como aconteceu em E-11, onde um **JSDoc escrito em E-04 contradizia o payload do próprio enunciado** sobre qual `messageId` deduplica (D-044), onde **o roteiro descrevia um estado que este sistema não produz** — transação em `PENDING` depois de erro transitório (D-047) — e onde a classificação literal de RF-21 **apagaria três erros de negócio sem deixar rastro nenhum** (D-048); e como aconteceu em E-12, onde um **índice criado para RN-09 passaria a impor unicidade sobre um kind que a regra nem menciona** (D-049), onde RN-04/RN-05 exigem uma referência `PROCESSED` **sem dizer o que fazer com os outros status** (D-050) e onde a resposta carrega **um** `failureCode` para violações que podem ser simultâneas (D-051) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila curta não significa que não vão surgir mais.
+A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022); e como aconteceu em E-05, onde o próprio escopo da etapa registrava duas vias sem escolher entre elas (D-023) e onde **dois documentos já registrados divergiam** sobre a chave da inbox (D-025); e como aconteceu em E-06, onde a rejeição do Custom Type em D-004 já implicava a forma do mapeamento sem que ninguém a tivesse registrado (D-026); e como aconteceu em E-07, onde RN-12 pedia um saldo que **nenhuma coluna guardava** (D-030) e onde **D-007 e o schema de E-05 se contradiziam** sobre `WALLET_NOT_FOUND` (D-031); e como voltou a acontecer em E-08, a etapa que mais expôs decisões de uma vez — **sete** —, incluindo o caso em que **o schema de E-05 tornava impossível** a transação interna que RF-08 exige, por seis colunas NOT NULL sem valor natural na abertura (D-033), e o caso em que **a própria consequência de D-006 não cobria o caminho normal** que E-07 acabara de produzir (D-036); e como aconteceu de novo em E-10, onde o enunciado **nomeia as filas de entrada e nenhuma de saída** (D-040), onde o LocalStack sobe vazio e ninguém tinha o encargo de criar a fila (D-041), e onde **D-008 fixava um limite de tentativas sem dizer o que acontece depois dele** (D-042, que a emenda); e como aconteceu em E-11, onde um **JSDoc escrito em E-04 contradizia o payload do próprio enunciado** sobre qual `messageId` deduplica (D-044), onde **o roteiro descrevia um estado que este sistema não produz** — transação em `PENDING` depois de erro transitório (D-047) — e onde a classificação literal de RF-21 **apagaria três erros de negócio sem deixar rastro nenhum** (D-048); e como aconteceu em E-12, onde um **índice criado para RN-09 passaria a impor unicidade sobre um kind que a regra nem menciona** (D-049), onde RN-04/RN-05 exigem uma referência `PROCESSED` **sem dizer o que fazer com os outros status** (D-050) e onde a resposta carrega **um** `failureCode` para violações que podem ser simultâneas (D-051) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0.
+
+E-13 fechou o ciclo com quatro de uma vez, e vale notar de onde vieram: **D-052** era o item que a própria fila já carregava; **D-053** era uma pendência que D-030 tinha nomeado e adiado; **D-054** apareceu porque o reuso de `decideReversal` esbarrou no grafo de D-013 — a pendente relida não pode ser re-marcada, e isso só se descobre ao escrever a segunda entrada; e **D-055** porque **RNF-06 exigia um `correlationId` que nenhuma coluna guardava**, exatamente como RN-12 exigira em E-07 um saldo que nenhuma coluna guardava (D-030). Fila vazia não significa que não vão surgir mais.
 
 ---
 
@@ -1201,3 +1203,102 @@ A terceira opção foi descartada porque reabriria D-031: `WALLET_NOT_FOUND` **n
 - A ordem é a ordem literal dos `if` de `decideReversal`, e há teste que a fixa (`ROLLBACK` sobre `LOSS` com valor errado responde `INVALID_REFERENCE_KIND`).
 - A checagem de kind (RN-08) precisa vir antes do cálculo de direção: `ledgerDirectionFor(reference)` lança `NoLedgerDirectionError` se a referência for `LOSS` ou `ROLLBACK`, e é o passo de RN-08 que garante que isso não acontece.
 - `ARCHITECTURE.md` registra a ordem junto da tabela de D-007: é a informação que falta para a tabela ser um contrato completo.
+
+---
+
+## D-052 — Colunas de retry de referência: estado operacional por `UPDATE` direto (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** o item que **D-029** deixou explicitamente em aberto e que bloqueava E-13. `reference_attempts` e `next_reference_attempt_at` existem em `wager_transactions` desde E-05, porque D-013 tirou o contador de tentativas do status e o pôs em colunas próprias. Até E-12 ninguém as escrevia — D-029 decidiu não escrever justamente para não fixar o dono antes de RF-26 e RN-15 terem sido lidos. Agora existem linhas `PENDING_REFERENCE` de verdade esperando por um dono.
+
+**Opções:**
+- **Estado do agregado**: acrescentar os dois campos a `WagerTransactionState` e um `scheduleReferenceRetry(now, policy)` reusando o `RetryPolicy` de D-022, simétrico a `OutboxMessage.scheduleRetry`.
+- **Estado operacional**: um `PendingReferenceStore` na infraestrutura, irmão de `OutboxClaimStore`, manipulando as duas colunas por `UPDATE` direto — o padrão que D-043 fixou para o lease da outbox.
+
+**Decisão:** **estado operacional, por `UPDATE` direto**, em `src/infrastructure/messaging/pending-reference-store.ts`.
+
+**Justificativa:** o próprio grafo de D-013 já tinha decidido metade disto. Aquele comentário diz, desde E-03, que "o reagendamento de uma referência ausente é `UPDATE` nas colunas, não transição — status é estado de negócio, contador de tentativa é dado operacional, e misturar os dois esconderia um contador dentro do grafo". Levar os campos ao agregado agora seria contradizer essa frase seis etapas depois.
+
+A simetria com `OutboxMessage.scheduleRetry` é aparente e enganosa: a `OutboxMessage` **é** um agregado de entrega — tentativa de publicação é a razão de ela existir. `WagerTransaction` é um agregado de **dinheiro**, e quantas vezes o worker tentou resolvê-la não é fato do negócio dela: um extrato não muda porque a infraestrutura precisou de três varreduras.
+
+Há um ganho concreto que só esta saída dá. D-028 obriga o `update` do repositório a escrever **lista fechada de colunas**, e essas duas estão fora do `Pick`. Com os donos separados, as duas escritas tocam a mesma linha sem nunca disputarem coluna: um `update` de status não zera o contador, e um reagendamento não move o status. Se os campos fossem do agregado, toda escrita passaria pelo mesmo `Pick` e a corrida entre o worker e o use case teria de ser resolvida por lock ou por ordem de chamada.
+
+**Consequências:**
+- `PendingReferenceStore` tem exatamente dois métodos: `findDue` (varredura) e `scheduleRetry` (reagendamento). Nenhum trava linha — a disputa entre workers é resolvida pelo `FOR UPDATE` da wallet dentro de `resolvePendingReference`, que continua sendo o ponto único de lock de RI-06.
+- `scheduleRetry` filtra por `status = 'PENDING_REFERENCE'` no `where`. É a guarda que substitui o lease: sem ela, um worker atrasado gravaria agendamento numa linha já terminal.
+- **`findDue` trata `next_reference_attempt_at` nulo como devida**, e isso não é defensivo: toda pendente **nasce** com a coluna nula, porque D-029 mandou o `insert` omiti-la. Uma varredura que só comparasse datas nunca resolveria nada.
+- O `Pick<WagerTransactionUpdate>` continua **sem** as duas colunas, e agora há teste dos dois lados: o round-trip prova que o repositório não as escreve, e `pending-reference-worker.test.ts` prova que um `update` de status preserva um contador escrito pelo store.
+- **Fecha D-029 e esvazia a fila de decisões em aberto.**
+
+---
+
+## D-053 — Saldo da resposta `202`: o corrente da wallet travada (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** pendência aberta por D-030 e explicitamente adiada para E-13. `markPendingReference` não observa saldo, então `observed_balance` fica nulo numa transação em `PENDING_REFERENCE` — e RF-13 devolve um campo `balance` em toda resposta, inclusive no `202` de RN-15. Desde E-07 o código cai no saldo corrente da wallet travada, com um comentário dizendo que E-13 decidiria a forma final.
+
+**Opções:**
+- **Saldo corrente da wallet travada**: mantém o comportamento; `observed_balance` continua nulo até haver desfecho.
+- **Congelar o saldo no `202`**: `markPendingReference` passa a observar saldo e gravar a coluna.
+- **Omitir `balance` do `202`**: o corpo do aceite pendente não traz saldo.
+
+**Decisão:** **o saldo corrente da wallet travada**, sem mudança de código.
+
+**Justificativa:** RN-12 fala do saldo **do desfecho** — "o resultado original, incluindo o saldo observado naquele momento" —, e uma transação em `PENDING_REFERENCE` não tem desfecho: ela ainda vai passar por `markProcessed` ou `reject`. Congelar um valor ali daria à espera a aparência de um resultado, e criaria um campo com dois significados: o saldo do aceite e, depois, o saldo da resolução, com o segundo sobrescrevendo o primeiro. A leitura sai de dentro do `FOR UPDATE` da wallet, então não é um valor solto — é o saldo que valia no instante em que o sistema aceitou a operação.
+
+Omitir o campo resolveria a semântica e quebraria o contrato: RF-13 já foi entregue em E-08 com `balance` sempre presente, e tornar o campo opcional obrigaria todo provedor a tratar um caso a mais para ganhar precisão numa resposta que, por definição, é provisória.
+
+**Consequências:**
+- Nenhuma linha de produção muda. O que muda é que os comentários de `markPendingReference`, `replay` e `process` deixam de dizer "E-13 decide" e passam a citar esta decisão.
+- `observed_balance` continua sendo escrito **só** por `markProcessed` e `reject` — a coluna significa uma coisa só.
+- O saldo definitivo da reversão chega ao provedor pelo evento do desfecho (`WagerTransactionProcessed` ou `WagerTransactionRejected`), publicado quando o worker de RF-26 resolve.
+
+---
+
+## D-054 — Re-resolução de pendentes: segunda entrada do mesmo use case (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-13. O worker de RF-26 precisa reavaliar uma reversão que ficou esperando, aplicando **as mesmas** regras de RN-04..RN-10 na ordem de D-051. Essas regras existem em um lugar só: `decideReversal`, método privado de `ProcessWagerTransaction`.
+
+**Opções:**
+- **Segunda entrada pública no mesmo use case**: `resolvePendingReference(transactionId, deadline)`, reusando `decideReversal`, `applyMovement` e `enqueueEvents`.
+- **Use case novo** (`ResolvePendingReference`) com a decisão de reversão extraída para um colaborador compartilhado pelos dois.
+
+**Decisão:** **segunda entrada no mesmo use case.**
+
+**Justificativa:** é o argumento de RF-18 aplicado a uma terceira entrada. HTTP e SQS compartilham `execute` porque duas implementações da mesma decisão divergem — e divergiriam aqui no ponto exato em que a divergência move dinheiro: o worker aplicando uma regra de reversão que a submissão não aplica, ou o contrário. Extrair a decisão para um colaborador chegaria ao mesmo lugar por um caminho mais longo, movendo ~150 linhas numa etapa que `AGENTS.md` §3 manda não usar para refatorar código fora do escopo.
+
+**Consequências:**
+- As duas chamadas de `markPendingReference()` **saem** de `decideReversal` para `process()`. `decideReversal` passa a só **decidir**; quem transiciona é quem sabe de onde a transação vem. Sem isso o reuso seria impossível: a pendente relida já **está** em `PENDING_REFERENCE`, e D-013 não tem self-loop — re-marcá-la lançaria.
+- `resolvePendingReference` recebe o `deadline` **por parâmetro**, e não lê o TTL do ambiente: mesmo padrão de D-022, que injeta a política na chamada para o use case não conhecer configuração.
+- Devolve `WagerTransactionStatus | undefined`, e não um tipo de resultado novo: o worker precisa de exatamente uma pergunta — "ainda está pendente?".
+- **A ordem dos locks é a mesma do caminho de submissão**: wallet primeiro, transação depois. Invertê-la abriria deadlock contra o `insert` de uma reversão nova, que toma `FOR KEY SHARE` na linha referenciada pela FK.
+- A transação é **relida sob o lock da wallet**, e um status diferente de `PENDING_REFERENCE` encerra sem escrever nada. É o que impede dois workers de resolverem a mesma pendente (EL-03) — mesma lição de E-10: quem garante correção é o lock dentro da transação, não a varredura.
+- `contextFor` passa a receber um `EventTrace` em vez do comando, porque agora há duas origens de desfecho.
+- `UnresolvablePendingReferenceError` nasce como guarda de programação: uma linha em `PENDING_REFERENCE` com kind que não reverte nada não veio de caminho de execução nenhum. Reagendá-la em silêncio a faria voltar a cada ciclo, para sempre.
+
+---
+
+## D-055 — `correlationId` persistido na transação (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-13. O worker de RF-26 publica `WagerTransactionProcessed` ou `WagerTransactionRejected` **fora de qualquer requisição**, minutos depois da submissão. RNF-06 exige `correlationId` no rastro e D-039 definiu de onde a borda HTTP o tira — mas nenhuma coluna o guardava: o campo vivia só no comando, que morre com a requisição.
+
+**Opções:**
+- **Gerar um novo por resolução**, com `causationId` apontando para a transação.
+- **Usar o id da transação como `correlationId`**.
+- **Persistir a correlação original**, em coluna nova.
+
+**Decisão:** **persistir**, em `correlation_id varchar(128)` acrescentada pela `m0003`.
+
+**Justificativa:** o desfecho de uma reversão fora de ordem é justamente o evento **mais difícil** de correlacionar à mão: acontece longe da submissão, em outro processo, possivelmente em outra instância. Um id novo ali romperia o rastro exatamente onde ele é mais caro de reconstruir, e usar o id da transação como correlação misturaria dois eixos — identidade de agregado e identidade de rastro — num campo que existe para o segundo.
+
+O custo é uma migration e uma coluna que hoje só o worker relê. É baixo, e a coluna passa a valer para toda leitura de incidente: dado um `correlationId` no log, a transação correspondente vira uma consulta, não uma correlação por horário.
+
+**Consequências:**
+- `varchar(128)`, e não os 120 dos identificadores de negócio: a correlação é valor **do provedor**, e `SAFE_CORRELATION_ID` (D-039) aceita 128.
+- **Nulável.** Uma linha criada antes da `m0003` não tem valor honesto a receber, e um sentinela de backfill fingiria um rastro que não existe. `WagerTransactionState` declara o campo opcional só por isso; `CreateWagerTransactionProps` o exige, então **toda transação nova** carrega correlação. Lendo nulo, `settle` cai no id gerado — o fallback que D-039 já previa.
+- **Não entra no `payloadHash`.** D-005 fecha a lista em 10 campos de negócio e a §9 proíbe metadado de transporte no hash: dois envios do mesmo payload com correlações diferentes continuam sendo o mesmo replay (RN-12, RN-14). Há teste unitário fixando isso.
+- Fora do `Pick<WagerTransactionUpdate>`: é imutável do nascimento ao terminal.
+- O `causationId` dos eventos publicados pelo worker é o **id da transação resolvida** — o elo que substitui a requisição ausente.
+- `OpenWallet` também a grava na `OPENING`: um caminho de escrita só se defende melhor do que uma exceção para o produtor interno.

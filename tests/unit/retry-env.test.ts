@@ -18,6 +18,7 @@ import {
   consumerBackoffSeconds,
   consumerRetryPolicy,
   outboxRetryPolicy,
+  pendingReferenceRetryPolicy,
   readRetryEnv,
 } from "../../src/infrastructure/config/retry-env.ts";
 
@@ -27,7 +28,7 @@ afterEach(() => {
   process.env = { ...ORIGINAL };
 });
 
-/** Limpa as doze variáveis, para que o teste veja o default e não o `.env` de quem roda. */
+/** Limpa as dezessete variáveis, para que o teste veja o default e não o `.env` de quem roda. */
 function semAmbiente(): void {
   delete process.env.OUTBOX_BASE_DELAY_MS;
   delete process.env.OUTBOX_MAX_DELAY_MS;
@@ -41,6 +42,11 @@ function semAmbiente(): void {
   delete process.env.CONSUMER_BATCH_SIZE;
   delete process.env.CONSUMER_BASE_DELAY_MS;
   delete process.env.CONSUMER_MAX_DELAY_MS;
+  delete process.env.PENDING_REFERENCE_TTL_MS;
+  delete process.env.PENDING_REFERENCE_BASE_DELAY_MS;
+  delete process.env.PENDING_REFERENCE_MAX_DELAY_MS;
+  delete process.env.PENDING_REFERENCE_BATCH_SIZE;
+  delete process.env.PENDING_REFERENCE_POLL_INTERVAL_MS;
 }
 
 /** Os defaults de D-008 do consumidor, repetidos onde o teste precisa do objeto inteiro. */
@@ -51,6 +57,15 @@ const DEFAULTS_CONSUMIDOR = {
   consumerBatchSize: 10,
   consumerBaseDelayMs: 1_000,
   consumerMaxDelayMs: 300_000,
+};
+
+/** Os defaults do worker de referências fora de ordem (RF-26), idem. */
+const DEFAULTS_REFERENCIA = {
+  pendingReferenceTtlMs: 900_000,
+  pendingReferenceBaseDelayMs: 1_000,
+  pendingReferenceMaxDelayMs: 300_000,
+  pendingReferenceBatchSize: 10,
+  pendingReferencePollIntervalMs: 1_000,
 };
 
 /** Os defaults da outbox, idem. */
@@ -67,7 +82,11 @@ describe("readRetryEnv — defaults conservadores de D-008", () => {
   it("entrega os números que D-008 fixou", () => {
     semAmbiente();
 
-    expect(readRetryEnv()).toEqual({ ...DEFAULTS_OUTBOX, ...DEFAULTS_CONSUMIDOR });
+    expect(readRetryEnv()).toEqual({
+      ...DEFAULTS_OUTBOX,
+      ...DEFAULTS_CONSUMIDOR,
+      ...DEFAULTS_REFERENCIA,
+    });
   });
 
   it("deixa o ambiente sobrescrever — é o que torna a suíte viável em ms", () => {
@@ -83,6 +102,11 @@ describe("readRetryEnv — defaults conservadores de D-008", () => {
     process.env.CONSUMER_BATCH_SIZE = "1";
     process.env.CONSUMER_BASE_DELAY_MS = "5";
     process.env.CONSUMER_MAX_DELAY_MS = "40";
+    process.env.PENDING_REFERENCE_TTL_MS = "120";
+    process.env.PENDING_REFERENCE_BASE_DELAY_MS = "5";
+    process.env.PENDING_REFERENCE_MAX_DELAY_MS = "40";
+    process.env.PENDING_REFERENCE_BATCH_SIZE = "2";
+    process.env.PENDING_REFERENCE_POLL_INTERVAL_MS = "10";
 
     expect(readRetryEnv()).toEqual({
       outboxBaseDelayMs: 5,
@@ -97,6 +121,11 @@ describe("readRetryEnv — defaults conservadores de D-008", () => {
       consumerBatchSize: 1,
       consumerBaseDelayMs: 5,
       consumerMaxDelayMs: 40,
+      pendingReferenceTtlMs: 120,
+      pendingReferenceBaseDelayMs: 5,
+      pendingReferenceMaxDelayMs: 40,
+      pendingReferenceBatchSize: 2,
+      pendingReferencePollIntervalMs: 10,
     });
   });
 
@@ -130,6 +159,7 @@ describe("outboxRetryPolicy — a política que D-022 manda injetar", () => {
     const policy = outboxRetryPolicy({
       ...DEFAULTS_OUTBOX,
       ...DEFAULTS_CONSUMIDOR,
+      ...DEFAULTS_REFERENCIA,
       outboxBaseDelayMs: 7,
       outboxMaxDelayMs: 99,
     });
@@ -182,14 +212,52 @@ describe("parâmetros do consumidor — a outra metade de D-008 (E-11)", () => {
     const policy = consumerRetryPolicy({
       ...DEFAULTS_OUTBOX,
       ...DEFAULTS_CONSUMIDOR,
+      ...DEFAULTS_REFERENCIA,
       consumerBaseDelayMs: 11,
       consumerMaxDelayMs: 77,
     });
 
-    // Curva única (D-008), números independentes: os dois loops falham por
+    // Curva única (D-008), números independentes: os três loops falham por
     // motivos diferentes e nada obriga a mesma cadência.
     expect(policy.baseDelayMs).toBe(11);
     expect(policy.maxDelayMs).toBe(77);
+  });
+});
+
+describe("parâmetros do worker de referências — a terceira parte de D-008 (E-13)", () => {
+  it("o TTL default é os 15 min que D-008 fixou", () => {
+    semAmbiente();
+
+    // Único número da tabela de D-008 que o enunciado cobra justificado por
+    // extenso: é a janela de espera prometida ao provedor, não uma contagem de
+    // varreduras (RF-26).
+    expect(readRetryEnv().pendingReferenceTtlMs).toBe(900_000);
+  });
+
+  it("TTL zerado ou malformado cai no default", () => {
+    semAmbiente();
+    process.env.PENDING_REFERENCE_TTL_MS = "0";
+    process.env.PENDING_REFERENCE_BATCH_SIZE = "quinze";
+
+    const env = readRetryEnv();
+
+    // TTL zero rejeitaria **toda** pendente na primeira varredura, com
+    // `REFERENCE_NOT_FOUND`, antes de a referência ter qualquer chance de chegar.
+    expect(env.pendingReferenceTtlMs).toBe(900_000);
+    expect(env.pendingReferenceBatchSize).toBe(10);
+  });
+
+  it("`pendingReferenceRetryPolicy` leva os limites do worker, não os dos outros dois", () => {
+    const policy = pendingReferenceRetryPolicy({
+      ...DEFAULTS_OUTBOX,
+      ...DEFAULTS_CONSUMIDOR,
+      ...DEFAULTS_REFERENCIA,
+      pendingReferenceBaseDelayMs: 13,
+      pendingReferenceMaxDelayMs: 88,
+    });
+
+    expect(policy.baseDelayMs).toBe(13);
+    expect(policy.maxDelayMs).toBe(88);
   });
 });
 
