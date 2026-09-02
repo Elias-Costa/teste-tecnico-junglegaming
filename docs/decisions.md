@@ -28,11 +28,11 @@ Registro leve de decisões, estilo ADR. Neste projeto ele tem **três** funçõe
 
 - **Dono de `reference_attempts` e `next_reference_attempt_at`** — aberto por **D-029**. As duas colunas existem no schema desde E-05 e não têm dono no domínio. E-13 escolhe entre levá-las ao agregado (um `scheduleReferenceRetry(now, policy)` reusando o `RetryPolicy` de D-022) ou tratá-las como estado operacional manipulado por `UPDATE` direto, como o lease da outbox em E-10. **Nada até E-12 depende disso:** por D-029, o repositório de E-06 simplesmente não escreve essas colunas, e nenhuma das duas saídas fica mais cara por causa disso.
 
-As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito, **D-033** a **D-039**, expostas por E-08 e resolvidas antes de a borda HTTP ser escrita, **D-040** a **D-043**, expostas por E-10 e resolvidas antes de o worker ser escrito, e **D-044** a **D-048**, expostas por E-11 e resolvidas antes de o consumidor ser escrito. **Nenhuma etapa até E-12 está bloqueada.**
+As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito, **D-033** a **D-039**, expostas por E-08 e resolvidas antes de a borda HTTP ser escrita, **D-040** a **D-043**, expostas por E-10 e resolvidas antes de o worker ser escrito, **D-044** a **D-048**, expostas por E-11 e resolvidas antes de o consumidor ser escrito, e **D-049** a **D-051**, expostas por E-12 e resolvidas antes de os quatro kinds restantes serem escritos. **Nenhuma etapa até E-13 está bloqueada** — e o único item da fila é justamente o que E-13 precisa decidir.
 
 **E-09 foi a primeira etapa a não expor decisão nenhuma**, e vale registrar por quê: ela não escreveu código de produção. A prova de concorrência é só teste, e a estratégia que ela verifica — pessimistic `FOR UPDATE` por wallet — já estava decidida em **D-002** desde 2026-09-01. A forma de RT-17 (três processos de sistema operacional subindo o `AppModule` inteiro, em vez de três chamadas ao use case no mesmo processo) também não foi escolha: **RI-08** cobra literalmente "correta com múltiplas **instâncias da aplicação**", e EL-05 é "correta somente com uma instância". Uma etapa sem decisão nova é sinal de que as anteriores foram bem fechadas, não de que alguém deixou de perguntar.
 
-A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022); e como aconteceu em E-05, onde o próprio escopo da etapa registrava duas vias sem escolher entre elas (D-023) e onde **dois documentos já registrados divergiam** sobre a chave da inbox (D-025); e como aconteceu em E-06, onde a rejeição do Custom Type em D-004 já implicava a forma do mapeamento sem que ninguém a tivesse registrado (D-026); e como aconteceu em E-07, onde RN-12 pedia um saldo que **nenhuma coluna guardava** (D-030) e onde **D-007 e o schema de E-05 se contradiziam** sobre `WALLET_NOT_FOUND` (D-031); e como voltou a acontecer em E-08, a etapa que mais expôs decisões de uma vez — **sete** —, incluindo o caso em que **o schema de E-05 tornava impossível** a transação interna que RF-08 exige, por seis colunas NOT NULL sem valor natural na abertura (D-033), e o caso em que **a própria consequência de D-006 não cobria o caminho normal** que E-07 acabara de produzir (D-036); e como aconteceu de novo em E-10, onde o enunciado **nomeia as filas de entrada e nenhuma de saída** (D-040), onde o LocalStack sobe vazio e ninguém tinha o encargo de criar a fila (D-041), e onde **D-008 fixava um limite de tentativas sem dizer o que acontece depois dele** (D-042, que a emenda); e como aconteceu em E-11, onde um **JSDoc escrito em E-04 contradizia o payload do próprio enunciado** sobre qual `messageId` deduplica (D-044), onde **o roteiro descrevia um estado que este sistema não produz** — transação em `PENDING` depois de erro transitório (D-047) — e onde a classificação literal de RF-21 **apagaria três erros de negócio sem deixar rastro nenhum** (D-048) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila curta não significa que não vão surgir mais.
+A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022); e como aconteceu em E-05, onde o próprio escopo da etapa registrava duas vias sem escolher entre elas (D-023) e onde **dois documentos já registrados divergiam** sobre a chave da inbox (D-025); e como aconteceu em E-06, onde a rejeição do Custom Type em D-004 já implicava a forma do mapeamento sem que ninguém a tivesse registrado (D-026); e como aconteceu em E-07, onde RN-12 pedia um saldo que **nenhuma coluna guardava** (D-030) e onde **D-007 e o schema de E-05 se contradiziam** sobre `WALLET_NOT_FOUND` (D-031); e como voltou a acontecer em E-08, a etapa que mais expôs decisões de uma vez — **sete** —, incluindo o caso em que **o schema de E-05 tornava impossível** a transação interna que RF-08 exige, por seis colunas NOT NULL sem valor natural na abertura (D-033), e o caso em que **a própria consequência de D-006 não cobria o caminho normal** que E-07 acabara de produzir (D-036); e como aconteceu de novo em E-10, onde o enunciado **nomeia as filas de entrada e nenhuma de saída** (D-040), onde o LocalStack sobe vazio e ninguém tinha o encargo de criar a fila (D-041), e onde **D-008 fixava um limite de tentativas sem dizer o que acontece depois dele** (D-042, que a emenda); e como aconteceu em E-11, onde um **JSDoc escrito em E-04 contradizia o payload do próprio enunciado** sobre qual `messageId` deduplica (D-044), onde **o roteiro descrevia um estado que este sistema não produz** — transação em `PENDING` depois de erro transitório (D-047) — e onde a classificação literal de RF-21 **apagaria três erros de negócio sem deixar rastro nenhum** (D-048); e como aconteceu em E-12, onde um **índice criado para RN-09 passaria a impor unicidade sobre um kind que a regra nem menciona** (D-049), onde RN-04/RN-05 exigem uma referência `PROCESSED` **sem dizer o que fazer com os outros status** (D-050) e onde a resposta carrega **um** `failureCode` para violações que podem ser simultâneas (D-051) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila curta não significa que não vão surgir mais.
 
 ---
 
@@ -1135,3 +1135,69 @@ A terceira opção foi descartada porque reabriria D-031: `WALLET_NOT_FOUND` **n
 - A classificação do consumidor não é "negócio vs. infraestrutura", é "**deixou rastro vs. não deixou**". É essa a frase que vai ao `ARCHITECTURE.md`, porque é ela que explica as duas metades de uma vez.
 - Desvio deliberado da leitura literal de RF-21, e precisa ser apresentado como tal: o enunciado supõe que erro de negócio sempre produz desfecho observável, e neste desenho três deles não produzem.
 - `IDEMPOTENCY_CONFLICT` na DLQ é o sinal mais valioso dos três: significa que o provedor reusou uma `idempotencyKey` com payload diferente, que é bug do lado dele.
+
+---
+
+## D-049 — A referência de `WIN` é informativa, não resolvida (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-12. RN-02 diz que `WIN` "**pode** referenciar a `BET` da mesma rodada", e o campo `referenceExternalTransactionId` é opcional no payload. Mas RN-07 ("a referência é resolvida por `(providerId, referenceExternalTransactionId)` e deve pertencer ao mesmo provider, player, wallet, moeda e rodada") não diz a que kinds se aplica, e RN-08, RN-09 e RN-10 falam explicitamente só de `REFUND`/`ROLLBACK`. Faltava dizer o que o sistema faz com a referência de um `WIN`.
+
+**Opções:**
+- **Informativa**: o campo é gravado em `reference_external_transaction_id` e nada mais; `reference_transaction_id` fica nulo.
+- **Resolver e validar como reversão**: RN-07 aplicada, `reference_transaction_id` gravado, referência ausente virando `PENDING_REFERENCE`.
+- **Validar sem gravar o vínculo**: rejeita `WIN` mal roteado, mas nunca escreve `reference_transaction_id`.
+
+**Decisão:** **informativa.** RN-07..RN-10 valem **apenas** para `REFUND` e `ROLLBACK`.
+
+**Justificativa:** o índice `uq_wager_transactions_reversal_once` é `(reference_transaction_id, kind) where status = 'PROCESSED'` (D-024). Resolver a referência do `WIN` faria **dois `WIN` sobre a mesma `BET` colidirem no banco** — uma regra de unicidade que nenhum requisito escreveu, aparecendo como efeito colateral de uma decisão de índice tomada para outro fim. E um `WIN` cuja `BET` ainda não chegou iria para `PENDING_REFERENCE`, adiando por até 15 minutos (D-008) um crédito que **não depende** da `BET` para ser calculado: o valor do prêmio vem no próprio payload. A terceira opção foi descartada por validar sem persistir — o sistema teria checado um vínculo que ninguém consegue consultar depois.
+
+**Consequências:**
+- `decide()` não resolve referência para `WIN`; `reference_transaction_id` é escrito **só** por `REFUND` e `ROLLBACK`.
+- O `WagerTransactionProcessed` de um `WIN` sai **sem** `referenceTransactionId`, mesmo quando o provedor mandou um. O campo do payload continua auditável na coluna `reference_external_transaction_id`.
+- **Limitação conhecida, para o `ARCHITECTURE.md`:** um `WIN` com referência inexistente ou apontando para outra rodada é aceito. A interpretação é que a referência do `WIN` é metadado de rastreio do provedor, não vínculo financeiro — o dinheiro do `WIN` não deriva da `BET`.
+
+---
+
+## D-050 — Referência não-`PROCESSED`: separar por reversibilidade futura (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-12. RN-04 e RN-05 exigem que a reversão incida sobre uma transação **`PROCESSED`**. Nenhum documento diz o que acontece quando a linha existe mas está em outro status — `REJECTED`, `FAILED` ou `PENDING_REFERENCE`. `REFERENCE_MISMATCH` está descrito em D-007 como divergência de "provider/player/wallet/moeda/rodada", e status não está nessa lista.
+
+**Opções:**
+- **Separar por reversibilidade futura**: `PENDING_REFERENCE` espera; `REJECTED`/`FAILED` é `REFERENCE_MISMATCH`.
+- **`REFERENCE_MISMATCH` sempre**: qualquer status diferente de `PROCESSED` é rejeição imediata.
+- **`PENDING_REFERENCE` sempre**: qualquer status diferente de `PROCESSED` espera o TTL de D-008 e vira `REFERENCE_NOT_FOUND`.
+
+**Decisão:** **separar.** Referência em `PENDING_REFERENCE` ainda pode virar `PROCESSED` → a reversão também vai para `PENDING_REFERENCE` (RN-15) e o worker de E-13 resolve. Referência `REJECTED` ou `FAILED` é terminal por D-013 e **nunca** vai virar `PROCESSED` → `REFERENCE_MISMATCH` imediato.
+
+**Justificativa:** a regra cabe em uma frase — **espera quem ainda pode virar `PROCESSED`; rejeita quem não pode mais** —, e as duas alternativas erram em pontas opostas por ignorar o grafo de D-013. "`REFERENCE_MISMATCH` sempre" rejeitaria uma cadeia fora de ordem legítima: um `ROLLBACK` de um `REFUND` que está, ele próprio, esperando a `BET` dele. É o cenário de RT-20 encadeado, e falhar nele por segundos de diferença desperdiça a máquina de `PENDING_REFERENCE` que RF-26 mandou construir. "`PENDING_REFERENCE` sempre" gastaria 15 minutos e uma vaga no worker esperando uma referência `REJECTED` cujo status é terminal — informação que o sistema **já tem** no momento da consulta.
+
+**Consequências:**
+- `decideReversal` consulta o status da referência logo depois de resolvê-la, antes das checagens de identidade de RN-07.
+- Status `PENDING` não aparece nesta análise porque este desenho não o persiste: E-07 insere a transação já no estado terminal (mesmo fato registrado em D-047).
+- Uma reversão pode entrar em `PENDING_REFERENCE` por **dois** motivos — referência ausente e referência ainda pendente. Os dois são o mesmo desfecho para o provedor, e o `WagerTransactionPendingReference` é o mesmo.
+
+---
+
+## D-051 — Ordem de avaliação das rejeições de reversão (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-12. Uma reversão pode violar várias regras ao mesmo tempo — um `ROLLBACK` sobre um `LOSS` (RN-08) com valor diferente do da referência (RN-10) e sem saldo (RN-16). D-007 fecha os códigos, mas não diz qual prevalece, e a resposta só carrega **um** `failureCode`. A ordem é contrato observável: é ela que decide o que o provedor lê.
+
+**Opções:**
+- **Pela coluna "Ação do provedor" de D-007**: primeiro o que ele corrige sozinho, depois o que o manda desistir, por último o que o manda escalar.
+- **Pela ordem das próprias RN** no documento de requisitos (RN-07 → RN-08 → RN-09 → RN-10 → RN-16).
+
+**Decisão:** pela **ação do provedor**:
+
+`CURRENCY_MISMATCH` → `REFERENCE_MISMATCH` → `INVALID_REFERENCE_KIND` → `AMOUNT_MISMATCH` → `ALREADY_REVERSED` → `INSUFFICIENT_FUNDS_ON_REVERSAL`
+
+**Justificativa:** §7.2 do enunciado define o `failureCode` como aquilo que basta para o provedor decidir entre **reenviar, corrigir o payload ou desistir**. Quando duas regras são violadas, o código útil é o da ação mais acionável: dizer `ALREADY_REVERSED` ("desista") a quem também mandou o valor errado faz o provedor desistir de uma operação que ele conseguiria corrigir. As duas ordens só divergem em um par — `AMOUNT_MISMATCH` antes de `ALREADY_REVERSED` —, e é exatamente esse par que a justificativa acima resolve. Ordenar pela numeração das RN seria ordenar pela ordem em que alguém escreveu o documento, que não é informação sobre o domínio.
+
+`CURRENCY_MISMATCH` vem primeiro porque é a única checagem que **não depende da referência**: é a moeda da operação contra a moeda da wallet (RF-02), e o `BET` de E-07 já a avalia nessa posição.
+
+**Consequências:**
+- A ordem é a ordem literal dos `if` de `decideReversal`, e há teste que a fixa (`ROLLBACK` sobre `LOSS` com valor errado responde `INVALID_REFERENCE_KIND`).
+- A checagem de kind (RN-08) precisa vir antes do cálculo de direção: `ledgerDirectionFor(reference)` lança `NoLedgerDirectionError` se a referência for `LOSS` ou `ROLLBACK`, e é o passo de RN-08 que garante que isso não acontece.
+- `ARCHITECTURE.md` registra a ordem junto da tabela de D-007: é a informação que falta para a tabela ser um contrato completo.

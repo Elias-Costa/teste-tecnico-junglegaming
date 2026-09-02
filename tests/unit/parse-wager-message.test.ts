@@ -19,7 +19,7 @@
 import { describe, expect, it } from "bun:test";
 import { WagerTransactionKind } from "../../src/domain/wager-transaction.ts";
 import { InvalidPayloadError } from "../../src/interface/http/errors/invalid-payload-error.ts";
-import { KindNotSubmittableError } from "../../src/interface/http/errors/kind-not-submittable-error.ts";
+import { KindNotSubmittableError } from "../../src/application/errors/kind-not-submittable-error.ts";
 import { parseWagerMessage } from "../../src/interface/messaging/dto/parse-wager-message.ts";
 
 /** O `data` do exemplo da §10, para os testes mudarem um campo por vez. */

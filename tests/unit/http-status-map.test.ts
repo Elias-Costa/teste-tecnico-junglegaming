@@ -16,7 +16,6 @@
 import { describe, expect, it } from "bun:test";
 import { HttpException, HttpStatus, NotFoundException } from "@nestjs/common";
 import { IdempotencyConflictError } from "../../src/application/errors/idempotency-conflict-error.ts";
-import { UnsupportedKindError } from "../../src/application/errors/unsupported-kind-error.ts";
 import { WalletAlreadyExistsError } from "../../src/application/errors/wallet-already-exists-error.ts";
 import { WalletNotFoundError } from "../../src/application/errors/wallet-not-found-error.ts";
 import { InvalidLedgerEntryError } from "../../src/domain/errors/invalid-ledger-entry-error.ts";
@@ -28,7 +27,7 @@ import { Money } from "../../src/domain/money.ts";
 import { WagerTransactionKind, WagerTransactionStatus } from "../../src/domain/wager-transaction.ts";
 import { isTransientDatabaseError } from "../../src/infrastructure/persistence/transient-error.ts";
 import { InvalidPayloadError } from "../../src/interface/http/errors/invalid-payload-error.ts";
-import { KindNotSubmittableError } from "../../src/interface/http/errors/kind-not-submittable-error.ts";
+import { KindNotSubmittableError } from "../../src/application/errors/kind-not-submittable-error.ts";
 import { httpProblemFor, httpStatusForResult } from "../../src/interface/http/http-status-map.ts";
 
 /** Erro com SQLSTATE, na forma exata em que o driver o entrega (D-037). */
@@ -155,12 +154,6 @@ describe("httpProblemFor: os 422 que não viram linha (D-031, RN-13)", () => {
 });
 
 describe("httpProblemFor: o que não é nenhuma das cinco situações (D-037)", () => {
-  it("kind ainda não implementado é 501 — limite de etapa, não regra", () => {
-    expect(httpProblemFor(new UnsupportedKindError(WagerTransactionKind.Win)).status).toBe(
-      HttpStatus.NOT_IMPLEMENTED,
-    );
-  });
-
   it("erro desconhecido é 500 e não vaza a mensagem original", () => {
     const problema = httpProblemFor(new Error("select * from wallets where senha = 'hunter2'"));
 

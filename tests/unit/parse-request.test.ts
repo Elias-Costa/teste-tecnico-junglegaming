@@ -21,7 +21,7 @@ import {
   parseSubmitTransactionRequest,
 } from "../../src/interface/http/dto/parse-submit-transaction-request.ts";
 import { InvalidPayloadError } from "../../src/interface/http/errors/invalid-payload-error.ts";
-import { KindNotSubmittableError } from "../../src/interface/http/errors/kind-not-submittable-error.ts";
+import { KindNotSubmittableError } from "../../src/application/errors/kind-not-submittable-error.ts";
 
 const CORRELACAO = "0199a1f0-0000-7000-8000-000000000000";
 

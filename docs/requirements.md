@@ -199,6 +199,10 @@ Submete uma operação de aposta.
 | **RN-04** | `REFUND` | crédito | 1 entrada `CREDIT` | reverte uma `BET` `PROCESSED`, **uma única vez** |
 | **RN-05** | `ROLLBACK` | inverso da referência | 1 entrada invertida | reverte uma transação `PROCESSED`, **uma única vez** |
 
+`[DECIDIDO: D-049]` — **a referência opcional de `WIN` é informativa, não resolvida.** RN-07..RN-10 valem **apenas** para `REFUND` e `ROLLBACK`. Lacuna exposta por E-12: resolver a referência do `WIN` faria o índice `uq_wager_transactions_reversal_once` (D-024) impor unicidade sobre um kind que RN-09 nem menciona — dois `WIN` sobre a mesma `BET` colidiriam —, e um `WIN` cuja `BET` ainda não chegou esperaria o TTL de D-008 por um crédito que não depende dela. O campo é gravado em `reference_external_transaction_id` e `reference_transaction_id` fica nulo.
+
+`[DECIDIDO: D-050]` — **referência que existe mas não está `PROCESSED`:** em `PENDING_REFERENCE` a reversão **espera** (RN-15), porque a referência ainda pode virar `PROCESSED`; em `REJECTED`/`FAILED` é `REFERENCE_MISMATCH` imediato, porque D-013 os define como terminais e esperar seria esperar por nada. Lacuna exposta por E-12: RN-04/RN-05 exigem a referência `PROCESSED` sem dizer o que fazer com os outros status.
+
 **RN-06** — `REFUND` e `ROLLBACK` exigem `referenceExternalTransactionId`. Ausência é rejeição, não aceite. **A ausência é tratada como payload inválido (`400`), não como transação `REJECTED`** — `[DECIDIDO: D-020]`, lacuna do enunciado resolvida: a taxonomia de D-007 está fechada em 13 códigos e nenhum descreve "a referência não veio no payload" (`REFERENCE_NOT_FOUND` é o esgotamento do TTL de RF-26). `WagerTransaction.create` lança `MissingReferenceError` e nenhuma transação chega a existir.
 
 **RN-07** — A referência é resolvida por `(providerId, referenceExternalTransactionId)` e deve pertencer ao **mesmo provider, player, wallet, moeda e rodada**. Qualquer divergência é rejeição.
@@ -223,6 +227,8 @@ Submete uma operação de aposta.
 
 **RN-17 — Taxonomia de `failureCode`**
 Toda rejeição carrega um `failureCode` estável e legível por máquina, suficiente para o provedor decidir se **reenvia**, **corrige o payload** ou **desiste**. `[DECIDIDO: D-007]` — enum fechado de 11 códigos de negócio, com a ação esperada documentada por código em `ARCHITECTURE.md` (documentada, não transmitida). Os **2 códigos de infraestrutura** para o status `FAILED` (`PERMANENT_INFRASTRUCTURE_ERROR` e `MAX_RETRIES_EXHAUSTED`) foram aprovados em D-007, fechando o enum em **13**.
+
+`[DECIDIDO: D-051]` — **quando uma reversão viola mais de uma regra, prevalece o código sobre o qual o provedor consegue agir:** `CURRENCY_MISMATCH` → `REFERENCE_MISMATCH` → `INVALID_REFERENCE_KIND` → `AMOUNT_MISMATCH` → `ALREADY_REVERSED` → `INSUFFICIENT_FUNDS_ON_REVERSAL`. É a coluna "Ação do provedor" de D-007 lida como ordem — *corrigir payload* antes de *desistir*, que vem antes de *escalar*. A resposta carrega **um** `failureCode`, e dizer "desista" a quem também errou o valor faria o provedor abandonar uma operação que ele conseguiria consertar.
 
 `[DECIDIDO: D-031]` — **`WALLET_NOT_FOUND` e `IDEMPOTENCY_CONFLICT` nunca aparecem na coluna `failure_code`.** Os dois são rejeições que o schema impede de virar linha: a FK `fk_wager_transactions_wallet` recusa transação para wallet inexistente, e o `UNIQUE (idempotency_key)` recusa uma segunda linha sob a mesma key. Ambos trafegam na resposta (`422` e `409` por D-006) sem nada ser persistido e sem evento publicado.
 

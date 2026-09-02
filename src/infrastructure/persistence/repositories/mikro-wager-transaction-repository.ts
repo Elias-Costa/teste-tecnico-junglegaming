@@ -1,6 +1,10 @@
 import type { EntityManager } from "@mikro-orm/postgresql";
 import type { WagerTransactionRepository } from "../../../domain/repositories/wager-transaction-repository.ts";
-import type { WagerTransaction } from "../../../domain/wager-transaction.ts";
+import {
+  WagerTransactionStatus,
+  type WagerTransaction,
+  type WagerTransactionKind,
+} from "../../../domain/wager-transaction.ts";
 import {
   toWagerTransaction,
   toWagerTransactionRow,
@@ -50,6 +54,50 @@ export class MikroWagerTransactionRepository implements WagerTransactionReposito
     );
 
     return row === null ? undefined : toWagerTransaction(row);
+  }
+
+  /**
+   * Leitura pela identidade no provedor (RN-07, RF-12).
+   *
+   * **Sem lock**, pelo mesmo motivo do finder de idempotência e por mais um: RN-07
+   * exige que a referência pertença à **mesma wallet** da reversão, e essa wallet
+   * já está travada pelo `FOR UPDATE` que o use case segurou. Não há segundo
+   * agregado a serializar, e travar aqui espalharia a aquisição de lock por dois
+   * lugares — exatamente o que RI-06 pede para não acontecer.
+   */
+  async findByProviderExternalId(
+    providerId: string,
+    externalTransactionId: string,
+  ): Promise<WagerTransaction | undefined> {
+    const row = await this.em.findOne(
+      wagerTransactionRowSchema,
+      { providerId, externalTransactionId },
+      READ_WITHOUT_IDENTITY_MAP,
+    );
+
+    return row === null ? undefined : toWagerTransaction(row);
+  }
+
+  /**
+   * Procura uma reversão já aplicada sobre a referência (RN-09).
+   *
+   * O filtro é o mesmo do índice parcial de D-024 — `(reference_transaction_id,
+   * kind)` restrito a `PROCESSED` —, e é deliberado: a consulta que o use case
+   * faz e a constraint que o banco impõe respondem à **mesma** pergunta, então
+   * uma não pode aceitar o que a outra recusa. Uma tentativa `REJECTED` não conta,
+   * porque ela não reverteu nada (RN-11).
+   */
+  async hasProcessedReversal(
+    referenceTransactionId: string,
+    kind: WagerTransactionKind,
+  ): Promise<boolean> {
+    const row = await this.em.findOne(
+      wagerTransactionRowSchema,
+      { referenceTransactionId, kind, status: WagerTransactionStatus.Processed },
+      READ_WITHOUT_IDENTITY_MAP,
+    );
+
+    return row !== null;
   }
 
   async update(transaction: WagerTransaction): Promise<void> {

@@ -462,11 +462,11 @@ describe("as cinco situações de RF-15, agora nos endpoints", () => {
 });
 
 describe("limite de etapa e correlação", () => {
-  it("kind ainda não processado é 501, não 500 (E-12 o remove)", async () => {
+  it("os cinco kinds submetíveis são processados — nenhum 501 sobrou de E-07", async () => {
     const walletId = await abrirWallet("100.00");
     const corpo = corpoDeAposta(walletId, { kind: "WIN" });
 
-    expect((await postar("/wagering/transactions", corpo, headersDeAposta())).status).toBe(501);
+    expect((await postar("/wagering/transactions", corpo, headersDeAposta())).status).toBe(200);
   });
 
   it("ecoa o X-Correlation-Id do provedor quando ele manda (D-039)", async () => {

@@ -8,7 +8,7 @@ import type {
   ReceivedMessage,
 } from "../../infrastructure/messaging/message-handler.ts";
 import { isTransientDatabaseError, violatedConstraintOf } from "../../infrastructure/persistence/transient-error.ts";
-import { KindNotSubmittableError } from "../http/errors/kind-not-submittable-error.ts";
+import { KindNotSubmittableError } from "../../application/errors/kind-not-submittable-error.ts";
 import { WAGER_TRANSACTIONS_CONSUMER } from "./consumer-name.ts";
 import { parseWagerMessage } from "./dto/parse-wager-message.ts";
 
@@ -123,9 +123,10 @@ function dispositionFor(error: unknown): MessageDisposition {
     return "dead-letter";
   }
 
-  // Tudo o mais: `InvalidMoneyError`, `UnsupportedKindError` (os kinds que E-12
-  // abre) e qualquer defeito nosso. Reenviar não conserta bug, e insistir
-  // bloquearia o `MessageGroupId` por cinco entregas inúteis (D-046).
+  // Tudo o mais: `InvalidMoneyError`, `MissingReferenceError` (D-020),
+  // `InvalidLedgerEntryError` (D-021) e qualquer defeito nosso. Reenviar não
+  // conserta payload inválido nem bug, e insistir bloquearia o `MessageGroupId`
+  // por cinco entregas inúteis (D-046).
   return "dead-letter";
 }
 

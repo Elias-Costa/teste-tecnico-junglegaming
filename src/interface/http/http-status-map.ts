@@ -1,6 +1,6 @@
 import { HttpException, HttpStatus } from "@nestjs/common";
 import { IdempotencyConflictError } from "../../application/errors/idempotency-conflict-error.ts";
-import { UnsupportedKindError } from "../../application/errors/unsupported-kind-error.ts";
+import { KindNotSubmittableError } from "../../application/errors/kind-not-submittable-error.ts";
 import { WalletAlreadyExistsError } from "../../application/errors/wallet-already-exists-error.ts";
 import { WalletNotFoundError } from "../../application/errors/wallet-not-found-error.ts";
 import { InvalidLedgerEntryError } from "../../domain/errors/invalid-ledger-entry-error.ts";
@@ -11,7 +11,6 @@ import type { FailureCode } from "../../domain/failure-code.ts";
 import { WagerTransactionStatus } from "../../domain/wager-transaction.ts";
 import { isTransientDatabaseError } from "../../infrastructure/persistence/transient-error.ts";
 import { InvalidPayloadError } from "./errors/invalid-payload-error.ts";
-import { KindNotSubmittableError } from "./errors/kind-not-submittable-error.ts";
 
 /**
  * **O mapa de status HTTP do sistema inteiro** (RF-15, D-006, D-036, D-037).
@@ -134,13 +133,6 @@ export function httpProblemFor(error: unknown): HttpProblem {
       message: error.message,
       failureCode: error.failureCode,
     };
-  }
-
-  // Limite de etapa, não regra: `WIN`/`LOSS`/`REFUND`/`ROLLBACK` chegam em E-12.
-  // `501` diz "ainda não implementado" sem ocupar nenhuma das cinco situações de
-  // RF-15 — e some quando E-12 abrir os kinds restantes.
-  if (error instanceof UnsupportedKindError) {
-    return { status: HttpStatus.NOT_IMPLEMENTED, message: error.message };
   }
 
   // (e) Falha transitória de infraestrutura, pela lista explícita de D-037.

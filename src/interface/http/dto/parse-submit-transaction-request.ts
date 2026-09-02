@@ -1,7 +1,7 @@
 import type { ProcessWagerTransactionCommand } from "../../../application/process-wager-transaction.ts";
 import { WagerTransactionKind } from "../../../domain/wager-transaction.ts";
 import { InvalidPayloadError } from "../errors/invalid-payload-error.ts";
-import { KindNotSubmittableError } from "../errors/kind-not-submittable-error.ts";
+import { KindNotSubmittableError } from "../../../application/errors/kind-not-submittable-error.ts";
 import { asObject, optionalString, requiredHeader, requiredMoney, requiredString } from "./parse.ts";
 
 /** Header que carrega a fonte da verdade da idempotência (RF-13, RF-14). */
