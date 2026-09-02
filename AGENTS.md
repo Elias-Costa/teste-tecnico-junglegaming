@@ -73,6 +73,13 @@ Se não for possível confirmar a API, **diga isso** em vez de gerar código pla
 - `Bun.randomUUIDv7()` é nativo. Nenhuma biblioteca de UUID no projeto.
 - O driver devolve `numeric` como `string`. Nenhum type parser pode ser registrado.
 
+**Fatos verificados em E-06** (mesma regra — não re-derivar, não contradizer):
+
+- `em.insert()` e `em.nativeUpdate()` **não passam pelo Unit of Work** e carregam o `transactionContext` do `EntityManager` até o driver. É o que torna a escrita por comando explícito de D-028 atômica dentro de `em.transactional()`.
+- `checkLockRequirements` **recusa `PESSIMISTIC_READ`/`PESSIMISTIC_WRITE` fora de transação** com `ValidationError`. `PESSIMISTIC_PARTIAL_WRITE` **não** está nessa lista — vale para o claim com lease de E-10.
+- `DecimalType` converte para `number` quando `runtimeType` é `'number'`. Por isso as colunas de dinheiro são mapeadas como `type: "string", columnType: "numeric(19,2)"`: nenhum tipo do ORM opina sobre o valor (EL-01).
+- O `CommitOrderCalculator` deriva a ordem dos `INSERT` das **relações declaradas**. Os modelos de linha de D-026 não declaram nenhuma, então quem ordena é o código do use case.
+
 ### 2.2 Quirks do ambiente de desenvolvimento
 
 - O Compose publica o PostgreSQL em **55432**, não 5432. Uma instalação nativa de PostgreSQL na máquina ocupa a 5432 e responde ao `localhost` antes do proxy do Docker; o sintoma é `28P01` com o container saudável e as credenciais corretas.

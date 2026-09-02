@@ -8,9 +8,9 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 
 ## Estado atual
 
-> **E-00 a E-05 CONCLUÍDAS** (2026-09-01). Stack validada de ponta a ponta, fundação de pé, núcleo de negócio fechado com teste, camada de mensageria do domínio pronta e o schema no banco com as garantias de RI-09.
-> `bun run check` = typecheck limpo, lint limpo, **174 unitários verdes**. `bun run check:full` = mais **40 de integração**, autoprovisionados.
-> **Etapa atual: E-06 — Persistência e repositórios.**
+> **E-00 a E-06 CONCLUÍDAS** (2026-09-01). Stack validada de ponta a ponta, fundação de pé, núcleo de negócio fechado com teste, camada de mensageria do domínio pronta, schema no banco com as garantias de RI-09 e os cinco agregados indo e voltando do PostgreSQL real.
+> `bun run check` = typecheck limpo, lint limpo, **181 unitários verdes**. `bun run check:full` = mais **62 de integração**, autoprovisionados.
+> **Etapa atual: E-07 — Use case de processamento (`BET`).**
 >
 > **Achados do spike que valem para todas as etapas seguintes:**
 > - MikroORM v7 **não tem decorators** — mapeamento por `EntitySchema`. Isso torna a fronteira domínio/ORM estrutural em vez de convencional.
@@ -51,15 +51,25 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 > - **O lease da outbox é par-ou-nada.** O `UPDATE` de claim de E-10 escreve `locked_by` e `locked_until` juntos, e quem limpar um precisa limpar o outro — inclusive o `UPDATE` que marca `published_at`, cuja forma continua em aberto para E-10.
 > - **`numeric` volta como string do driver**, travado por teste em E-05. O mapper de E-06 recebe string e não pode assumir `number` em ponto nenhum (D-004, EL-01).
 > - **`payload` da outbox é `jsonb`** e é consultável por `->>`. O `attempts` e o `reference_attempts` têm `CHECK >= 0`.
-> - **Ficou de fora de propósito, por não ser escopo desta etapa:** nenhum comando de linha de comando para rodar migration. Hoje o `up` só acontece dentro do teste de RT-08. A etapa que sobe a aplicação (E-14/E-15) precisa expor isso, senão o avaliador não tem como aplicar o schema do zero — e o README é entregável avaliado.
+> - **Ficou de fora de propósito, por não ser escopo desta etapa:** nenhum comando de linha de comando para rodar migration. Hoje o `up` só acontece dentro do teste de RT-08 e nos dois testes novos de E-06. A etapa que sobe a aplicação (E-14/E-15) precisa expor isso, senão o avaliador não tem como aplicar o schema do zero — e o README é entregável avaliado.
 >
-> **Decisões em vigor:** D-001 MikroORM **sem plano B** · D-003 `Money` sobre **`bigint` de centavos** · D-004 coluna **`numeric(19,2)`** + mapper próprio · D-007 (13 `failureCode` fechados) · D-009 (outbox por claim com lease) · D-011 infra de teste **híbrida** · D-012 auth **não implementada** · D-013 (grafo sem self-loop; `FAILED` só em erro permanente ou DLQ) · D-014 (ids UUIDv7, cursor keyset de coluna única) · D-015 (escala de entrada exatamente 2 casas) · D-016 (`currency` validada por forma `[A-Z]{3}`, sem tabela ISO) · D-017 (`equals` lança em moeda diferente) · **D-018** (`debit`/`credit` devolvem o lançamento) · **D-019** (saldo insuficiente: consulta + guarda) · **D-020** (referência ausente é payload inválido) · **D-021** (movimentação exige valor estritamente positivo) · **D-022** (backoff equal jitter, política injetada na chamada) · **D-023** (imutabilidade do ledger por trigger) · **D-024** (unicidade de reversão parcial sobre `PROCESSED`) · **D-025** (PK composta na inbox; alcance de D-014 corrigido).
+> **O que E-06 deixou para as etapas seguintes:**
+> - **Repositório é objeto de transação, não singleton (D-028).** Cada um recebe o `EntityManager` no construtor, e o que vale é o **forkado** que `em.transactional()` entrega. E-07 constrói os cinco dentro do callback da transação; construí-los fora faria as escritas acontecerem em autocommit, que é a forma silenciosa de quebrar RF-23. O padrão está em `repositoriesOn()` no teste de round-trip.
+> - **A ordem dos `INSERT` é a ordem do código.** Sem Unit of Work não há commit order calculado, então quem escreve o use case é quem garante wallet → transação → ledger. Inverter dá `23503`, não erro silencioso — mas dá em runtime, não em compilação.
+> - **`findByIdForUpdate` é o único ponto que trava wallet (D-002, RI-06).** Toda operação que vai mexer em saldo entra por ele; `findById` é leitura de RF-09 e não bloqueia ninguém. Um segundo lugar que emita `FOR UPDATE` sobre `wallets` é violação de RI-06 por dispersão — é o que uma revisão de E-07/E-09 precisa procurar.
+> - **`WalletLedgerRepository` não tem `update` nem `delete`, e não é esquecimento.** É a terceira camada de EL-07, junto da entidade imutável e da trigger de D-023. Acrescentar um método de mutação ali é desfazer a decisão, não completar a interface.
+> - **Toda leitura desliga o identity map.** Consequência de D-028: nenhuma linha lida fica gerenciada, então `flush()` não tem o que emitir. Quem introduzir `em.persist()` no caminho de escrita reintroduz o rastreamento e volta a expor o ledger ao `P0001`.
+> - **`update` escreve lista fechada de colunas**, tipada por `Pick<...>` em cada mapper. Campo novo no agregado **não** é persistido automaticamente: precisa entrar no `Pick`. O round-trip é o que denuncia o esquecimento.
+> - **`reference_attempts` e `next_reference_attempt_at` continuam sem dono (D-029).** O repositório não as escreve, e há teste provando. **A decisão é de E-13** e está na fila de `docs/decisions.md`.
+> - **`WagerTransaction` não tem finder por `idempotencyKey` nem por `(providerId, externalTransactionId)`.** Ficou de fora por escopo: E-06 entrega o round-trip, e esses dois caminhos de leitura são de RF-12/RF-14, que E-07 e E-08 implementam. As constraints únicas já existem no schema.
+>
+> **Decisões em vigor:** D-001 MikroORM **sem plano B** · D-003 `Money` sobre **`bigint` de centavos** · D-004 coluna **`numeric(19,2)`** + mapper próprio · D-007 (13 `failureCode` fechados) · D-009 (outbox por claim com lease) · D-011 infra de teste **híbrida** · D-012 auth **não implementada** · D-013 (grafo sem self-loop; `FAILED` só em erro permanente ou DLQ) · D-014 (ids UUIDv7, cursor keyset de coluna única) · D-015 (escala de entrada exatamente 2 casas) · D-016 (`currency` validada por forma `[A-Z]{3}`, sem tabela ISO) · D-017 (`equals` lança em moeda diferente) · **D-018** (`debit`/`credit` devolvem o lançamento) · **D-019** (saldo insuficiente: consulta + guarda) · **D-020** (referência ausente é payload inválido) · **D-021** (movimentação exige valor estritamente positivo) · **D-022** (backoff equal jitter, política injetada na chamada) · **D-023** (imutabilidade do ledger por trigger) · **D-024** (unicidade de reversão parcial sobre `PROCESSED`) · **D-025** (PK composta na inbox; alcance de D-014 corrigido) · **D-026** (mapeamento por modelos de linha + mapper, não sobre as classes de domínio) · **D-027** (interfaces de repositório no domínio) · **D-028** (escrita por comando explícito, sem Unit of Work) · **D-029** (colunas de retry de referência sem dono até E-13).
 >
 > Também decidido: D-002 (pessimistic `FOR UPDATE` por wallet) · D-005 (SHA-256 sobre lista fechada de 10 campos) · D-006 (`400`/`409`/`422`/`202`/`503`) · D-008 (defaults conservadores e configuráveis por ambiente).
 >
 > D-010 (`prom-client` em `GET /metrics`).
 >
-> **Fila de decisões vazia — nenhuma etapa bloqueada.** As 15 decisões que o enunciado delegava estão fechadas e registradas, mais D-016 e D-017 (expostas por E-02), D-018 a D-021 (expostas por E-03), D-022 (exposta por E-04) e D-023 a D-025 (expostas por E-05), todas fechadas pelo mantenedor antes de o código ser escrito. Se a implementação expuser uma decisão não prevista, ela **para a etapa** e vai para `docs/decisions.md` (`AGENTS.md` §0).
+> **Fila com um item, que só bloqueia E-13** — o dono de `reference_attempts`/`next_reference_attempt_at`, aberto por D-029. **Nenhuma etapa até E-12 está bloqueada.** As 15 decisões que o enunciado delegava estão fechadas e registradas, mais D-016 e D-017 (expostas por E-02), D-018 a D-021 (expostas por E-03), D-022 (exposta por E-04), D-023 a D-025 (expostas por E-05) e D-026 a D-029 (expostas por E-06), todas fechadas pelo mantenedor antes de o código ser escrito. Se a implementação expuser uma decisão não prevista, ela **para a etapa** e vai para `docs/decisions.md` (`AGENTS.md` §0).
 
 ---
 
@@ -216,12 +226,12 @@ Não é arquitetura. É descobrir, na hora 2 e não na hora 40, se a stack fecha
 
 **Ler antes:** RF-01 (mapeamento), RF-02; D-002, D-004.
 **Escopo:**
-- [ ] Mapeamento `Money` ↔ colunas num **mapper explícito da infra** (D-004), com `rehydrate` reconstruindo o value object. O domínio não importa nada do ORM.
-- [ ] **Teste que prova que o driver devolve `numeric` como `string`, não `number`.** É o padrão do node-postgres, mas um type parser registrado por engano converteria para float em silêncio — a forma mais difícil de enxergar de introduzir EL-01. O teste trava o comportamento (D-004).
-- [ ] Repositórios de wallet, transação, ledger, inbox e outbox.
-- [ ] Aquisição de lock por wallet conforme D-002, isolada num único ponto do código.
+- [x] Mapeamento `Money` ↔ colunas num **mapper explícito da infra** (D-004), com `rehydrate` reconstruindo o value object. O domínio não importa nada do ORM. — `money-mapper.ts`, com guarda de tipo contra o driver; um mapper por agregado em `mappers/`, e `rehydrate` chamado só ali.
+- [x] **Teste que prova que o driver devolve `numeric` como `string`, não `number`.** É o padrão do node-postgres, mas um type parser registrado por engano converteria para float em silêncio — a forma mais difícil de enxergar de introduzir EL-01. O teste trava o comportamento (D-004). — três asserções: SQL cru, leitura mapeada, e round-trip exato no teto de `numeric(19,2)`, onde um `double` perderia dígitos.
+- [x] Repositórios de wallet, transação, ledger, inbox e outbox. — escrita por comando explícito dentro de `em.transactional()` (D-028); ports no domínio (D-027); mapeamento por `EntitySchema` sobre modelos de linha (D-026).
+- [x] Aquisição de lock por wallet conforme D-002, isolada num único ponto do código. — `MikroWalletRepository.findByIdForUpdate`, com o SQL emitido verificado em teste.
 
-**Critério de conclusão:** round-trip de cada agregado (persistir → reidratar → comparar) verde contra o Postgres real.
+**Critério de conclusão:** round-trip de cada agregado (persistir → reidratar → comparar) verde contra o Postgres real. — **atingido**; 19 testes em `persistence-round-trip.test.ts` e 3 em `wallet-lock.test.ts`.
 
 ## E-07 — Use case de processamento (`BET`)
 

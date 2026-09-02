@@ -24,9 +24,13 @@ Registro leve de decisões, estilo ADR. Neste projeto ele tem **três** funçõe
 
 ## Fila de decisões em aberto
 
-**Vazia.** As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, e **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita. **Nenhuma etapa do `implementation-plan.md` está bloqueada.**
+**Um item, que só bloqueia E-13.**
 
-A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022); e como aconteceu em E-05, onde o próprio escopo da etapa registrava duas vias sem escolher entre elas (D-023) e onde **dois documentos já registrados divergiam** sobre a chave da inbox (D-025) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila vazia não significa que não vão surgir mais.
+- **Dono de `reference_attempts` e `next_reference_attempt_at`** — aberto por **D-029**. As duas colunas existem no schema desde E-05 e não têm dono no domínio. E-13 escolhe entre levá-las ao agregado (um `scheduleReferenceRetry(now, policy)` reusando o `RetryPolicy` de D-022) ou tratá-las como estado operacional manipulado por `UPDATE` direto, como o lease da outbox em E-10. **Nada até E-12 depende disso:** por D-029, o repositório de E-06 simplesmente não escreve essas colunas, e nenhuma das duas saídas fica mais cara por causa disso.
+
+As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, e **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito. **Nenhuma etapa até E-12 está bloqueada.**
+
+A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022); e como aconteceu em E-05, onde o próprio escopo da etapa registrava duas vias sem escolher entre elas (D-023) e onde **dois documentos já registrados divergiam** sobre a chave da inbox (D-025); e como aconteceu em E-06, onde a rejeição do Custom Type em D-004 já implicava a forma do mapeamento sem que ninguém a tivesse registrado (D-026) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila curta não significa que não vão surgir mais.
 
 ---
 
@@ -621,3 +625,92 @@ A PK composta também põe a garantia de EL-05 no lugar mais visível do schema:
 - **D-014 fica com o alcance corrigido**: UUIDv7 é o padrão de id nas tabelas que têm id sintético — `wallets`, `wager_transactions`, `wallet_ledger_entries` e `outbox_messages`. A inbox é a exceção registrada, e é a única.
 - E-06 mapeia `InboxMessage` com chave primária composta; nenhum id é gerado para ela.
 - RT-08 prova a dedupe inserindo o mesmo par duas vezes e recebendo erro do banco, e prova que o **mesmo `message_id` em consumidores diferentes** é aceito — que é o caso que uma chave global colapsaria em silêncio.
+
+---
+
+## D-026 — Forma do mapeamento ORM ↔ domínio: modelos de linha + mapper (2026-09-01)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-06. O domínio de E-02..E-04 e o schema de E-05 existem, mas nada os liga. D-001 fixou o MikroORM v7, cujo mapeamento é `EntitySchema` — objeto de infraestrutura, sem decorators. D-004 já havia rejeitado o Custom Type do MikroORM para `Money`, o que remove o único mecanismo pelo qual o ORM saberia transformar duas colunas num value object. Faltava registrar **sobre o quê** o `EntitySchema` é declarado.
+
+**Opções:**
+- **`EntitySchema` sobre as classes de domínio**: o ORM hidrata `Wallet` e `WagerTransaction` diretamente, mapeando os campos privados (`_balance`, `_version`). Menos código, mas `Money` exigiria o Custom Type rejeitado por D-004 — ou propriedades virtuais com hooks — e o schema passaria a depender de nomes de campo privado do agregado.
+- **Modelos de linha na infraestrutura + mapper explícito**: `EntitySchema` sobre tipos que espelham a tabela; um mapper por agregado converte linha → `rehydrate()` e agregado → linha.
+
+**Decisão:** **modelos de linha + mapper.**
+
+**Justificativa:** é a única opção que mantém D-004 de pé. Sem Custom Type, o ORM não tem como produzir um `Money` a partir de `numeric` + `varchar`; mapear o agregado direto reintroduziria o Custom Type pela porta dos fundos ou espalharia hooks de hidratação. Há um segundo motivo, mais forte: `rehydrate` só cumpre seu papel se alguém o chamar. Mapeando o agregado direto, o ORM o construiria por `Object.create`, contornando as factories que E-02..E-04 desenharam como **única** porta de entrada do estado. E o `EntitySchema` deixaria de espelhar a tabela para espelhar campos privados — o acoplamento que RF-01 e `AGENTS.md` §4 existem para evitar.
+
+**Consequências:**
+- `src/infrastructure/persistence/rows/` — cinco `EntitySchema`, espelho fiel de `m0001-initial-schema.ts`. Coluna que o schema inventar não existe no banco.
+- `src/infrastructure/persistence/mappers/` — a única camada que conhece as duas representações. `rehydrate()` é chamado aqui e em nenhum outro lugar do sistema.
+- O domínio segue sem import de ORM, agora por construção e não por convenção: não existe arquivo em `src/domain/` que o `EntitySchema` precise citar.
+- **Custo registrado para `ARCHITECTURE.md`:** cinco tipos de linha a mais, e toda coluna nova precisa ser acrescentada em dois lugares (schema e mapper). É o preço de manter o agregado livre do ORM, e é o mesmo trade-off que D-004 já aceitou para `Money`.
+
+---
+
+## D-027 — Interfaces de repositório: na camada de domínio (2026-09-01)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-06. O use case de E-07 consome repositórios sem conhecer o MikroORM, então a interface precisa viver fora da infraestrutura. Faltava decidir em qual das duas camadas restantes.
+
+**Opções:**
+- **`src/application/ports/`** (Clean Architecture): a aplicação declara o que precisa; a infra implementa. Alinharia com `ProviderIdentityPort` de D-012.
+- **`src/domain/repositories/`** (DDD clássico): a interface do repositório pertence ao domínio, porque só fala de agregados.
+
+**Decisão:** **`src/domain/repositories/`.**
+
+**Justificativa:** o contrato é escrito inteiramente em vocabulário de domínio — `Wallet`, `WagerTransaction`, `WalletLedgerEntry` — e pertence a quem define esses tipos. Pôr na aplicação faria a camada de aplicação declarar uma interface em que nenhum tipo é dela. A regra de fronteira do ESLint continua satisfeita: nenhuma dessas interfaces importa de `application`, `infrastructure` ou `interface`, nem de pacote externo.
+
+**Consequências:**
+- Cinco interfaces em `src/domain/repositories/`.
+- **`WalletRepository.findByIdForUpdate` nomeia a intenção, não a estratégia.** "Ler para escrever" é pergunta de domínio; `SELECT ... FOR UPDATE` é resposta da infra (D-002) e pode mudar sem tocar o contrato. É o único ponto em que persistência encosta no vocabulário do domínio, e fica registrado como tal em vez de passar despercebido.
+- **`WalletLedgerRepository` não tem `update` nem `delete`.** RI-05 e EL-07 passam a ser estruturais também na porta: não existe assinatura para mutar o ledger, então o caminho que a trigger de D-023 recusa nem chega a ser expressável no código de aplicação.
+- `ProviderIdentityPort` (D-012) continua na aplicação quando E-08 o criar: identidade de provedor não é agregado deste domínio.
+
+---
+
+## D-028 — Escrita: comandos explícitos, não Unit of Work (2026-09-01)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-06. RF-23 exige transação SQL única cobrindo transação, saldo, ledger, inbox e outbox. Dentro de `em.transactional()`, o MikroORM oferece dois caminhos de escrita: `em.persist()` com flush (Unit of Work, com change tracking e identity map) ou `em.insert()` / `em.nativeUpdate()` (comandos diretos ao driver).
+
+**Opções:**
+- **Unit of Work puro** — o argumento nominal de D-001 ("Unit of Work explícito para argumentar a atomicidade de RF-23").
+- **Comandos explícitos** — a ordem do SQL é a ordem do código.
+- **Híbrido** — UoW no que sofre `UPDATE`, comandos no que é insert-only.
+
+**Decisão:** **comandos explícitos.** `em.insert()` e `em.nativeUpdate()` dentro de `em.transactional()`.
+
+**Justificativa:** com UoW, quem decide a ordem dos `INSERT` é o `CommitOrderCalculator`, que a deriva das **relações declaradas** entre entidades — e os modelos de linha de D-026 não declaram relação nenhuma, só colunas `uuid`. A FK `fk_wallet_ledger_entries_wallet` exige a wallet antes do lançamento; sem relação declarada, essa ordem viraria acidente, e o modo de falhar é um `23503` intermitente sob carga. Declarar relações `m:1` só para ensinar o ordenador traria referências e populate para dentro de um mapeamento que existe justamente para ser burro.
+
+O segundo motivo é EL-07: sem UoW não há identity map, e sem identity map não existe caminho em que um flush emita `UPDATE` sobre uma linha do ledger — que é exatamente o cenário para o qual a trigger de D-023 foi escrita. Ter a rede **e** não ter como acioná-la é melhor que depender só da rede.
+
+A atomicidade de RF-23 não é afetada: ela vem do `em.transactional()`, que abre e fecha a transação do PostgreSQL. O flush do UoW é agrupamento de escrita, não a garantia — verificado no código instalado: `em.insert()` e `em.nativeUpdate()` passam o mesmo `transactionContext` ao driver. **Registrado para não parecer contradição na apresentação:** D-001 citou o Unit of Work entre as razões de escolher o MikroORM; o que este projeto usa dele é o `EntityManager` e o `transactional`, não o change tracking.
+
+**Consequências:**
+- Nenhum `em.persist()` / `em.flush()` no caminho de escrita dos repositórios.
+- Leituras usam `disableIdentityMap: true`, para que a decisão valha também na volta — caso contrário o identity map voltaria pela porta da leitura.
+- Todo `update` escreve **lista fechada de colunas**, escrita à mão no repositório. É o que dá a D-029 um lugar natural e o que impede um campo novo de ser persistido sem alguém decidir.
+- **Repositório é objeto de transação, não singleton.** Cada um recebe no construtor o `EntityManager` que `em.transactional()` entrega; E-07 os constrói dentro da transação.
+- Limitação conhecida para `ARCHITECTURE.md`: escrever a lista de colunas à mão é mais verboso que `flush()`, e uma coluna esquecida não é apontada pelo compilador. O round-trip de E-06 é a contrapartida — ele compara agregado ida e volta, campo a campo.
+
+---
+
+## D-029 — Colunas de retry de referência: sem dono no domínio até E-13 (2026-09-01)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-06. `wager_transactions` tem `reference_attempts` e `next_reference_attempt_at` desde E-05, porque D-013 tirou o contador de tentativas do status e o pôs em colunas próprias. Mas `WagerTransaction` não tem esses campos: RF-03 não os lista e E-03 não os modelou. São as duas únicas colunas do schema sem dono no domínio, e E-13 (RF-26) vai precisar delas.
+
+**Opções:**
+- **Levar ao domínio agora**: acrescentar os dois campos a `WagerTransactionState` e um `scheduleReferenceRetry(now, policy)` reusando o `RetryPolicy` de D-022.
+- **O repositório não escreve as colunas**: `insert` deixa valer o `default 0` do banco; `update` toca só o que o domínio possui.
+
+**Decisão:** **o repositório não escreve as colunas.**
+
+**Justificativa:** decidir o dono agora seria decidir por E-13 sem ter lido RF-26 e RN-15 — o caso que `AGENTS.md` §0 nomeia. Não escrever é a única opção que não fecha porta: nenhuma das duas alternativas de E-13 fica mais cara por causa dela. E há um ganho concreto — D-028 já obriga lista fechada de colunas no `update`, então quando E-13 passar a manipular essas colunas, nada do que ela escrever será sobrescrito por um `update` de status vindo de outro caminho.
+
+**Consequências:**
+- Os modelos de linha declaram as duas colunas como **opcionais**, para que `em.insert()` não as inclua e o default do banco valha. O mapper não as lê nem as escreve.
+- **Decisão pendente, listada na fila:** se as duas colunas viram estado do agregado ou continuam operacionais, manipuladas por `UPDATE` direto como o lease da outbox em E-10. A escolha é de E-13.
+- O round-trip de E-06 asserta que as colunas seguem `0` e nulo depois de `insert` e de `update`. Sem esse teste, "o repositório não escreve" seria afirmação, não fato.

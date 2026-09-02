@@ -2,6 +2,7 @@ import { defineConfig, type Options } from "@mikro-orm/postgresql";
 import { Migrator } from "@mikro-orm/migrations";
 import { buildClientUrl } from "../config/database-env.ts";
 import { MIGRATIONS } from "./migrations/index.ts";
+import { ROW_SCHEMAS } from "./rows/index.ts";
 
 /**
  * Configuração do MikroORM.
@@ -10,10 +11,11 @@ import { MIGRATIONS } from "./migrations/index.ts";
  * Compose e o Testcontainers serem intercambiáveis sem que nada aqui saiba qual
  * dos dois provisionou o banco.
  *
- * `entities: []` é o estado correto em E-05: o mapeamento por `EntitySchema` é
- * escopo de E-06, e o schema desta etapa é criado por SQL escrito à mão, não por
- * diff de metadata. Enquanto a lista estiver vazia, `warnWhenNoEntities` fica
- * desligado para não poluir a saída de teste com um aviso esperado.
+ * `entities` recebe os `EntitySchema` de E-06 (D-026) — mapeamentos sobre
+ * modelos de linha, não sobre as classes de domínio. O schema em si continua
+ * sendo criado pela migration escrita à mão: a metadata aqui **descreve** as
+ * tabelas de E-05, nunca as gera. `snapshot: false` abaixo é o que impede as
+ * duas coisas de virarem duas fontes da verdade.
  *
  * O `Migrator` é registrado explicitamente em `extensions`. `MikroORM.init()`
  * também carrega extensões sozinho, mas a dependência passaria a ser implícita —
@@ -23,8 +25,7 @@ import { MIGRATIONS } from "./migrations/index.ts";
 export function buildOrmConfig(): Options {
   return defineConfig({
     clientUrl: buildClientUrl(),
-    entities: [],
-    discovery: { warnWhenNoEntities: false },
+    entities: [...ROW_SCHEMAS],
     extensions: [Migrator],
     migrations: {
       // Lista explícita em vez de descoberta por glob — ver `migrations/index.ts`.
