@@ -1,15 +1,5 @@
 import type { IntegrationEvent } from "./events/integration-event.ts";
-import type { RetryPolicy } from "./retry-policy.ts";
-
-/**
- * Teto do expoente do backoff.
- *
- * Existe para que nenhuma contagem de tentativa produza `Infinity` em
- * `2 ** attempts` — a curva já satura em `maxDelayMs` muito antes disso, então o
- * limite não altera nenhum atraso real. É guarda contra dado corrompido vindo do
- * banco, não regra de negócio.
- */
-const MAX_BACKOFF_EXPONENT = 30;
+import { backoffDelayMs, type RetryPolicy } from "./retry-policy.ts";
 
 /** Enfileiramento de um evento recém-produzido (RF-06). */
 export interface EnqueueOutboxProps<T> {
@@ -179,32 +169,20 @@ export class OutboxMessage {
   /**
    * Incrementa as tentativas e agenda a próxima com equal jitter (RF-06, D-022).
    *
-   * `h = min(maxDelayMs, baseDelayMs · 2^tentativas) / 2` e `delay = h + rand·h`,
-   * ou seja, o atraso cai entre `h` e `2h`. O piso é o ponto da decisão: com full
-   * jitter o sorteio pode dar quase zero, e sob indisponibilidade prolongada do
-   * SQS as primeiras tentativas ficariam quase quentes. O jitter é obrigatório
-   * (D-008) porque sem ele várias instâncias sincronizam tentativas e criam picos.
-   *
-   * O expoente é a contagem **antes** do incremento, para que a primeira falha
-   * agende no degrau base e não já no dobro dele.
+   * A curva é `backoffDelayMs`, em `retry-policy.ts`: ela é compartilhada com o
+   * consumidor SQS de E-11, que precisa do mesmo atraso para o
+   * `ChangeMessageVisibility` de um erro transitório. D-008 pede **uma** curva
+   * para os três loops, e mantê-la aqui dentro obrigaria o segundo consumidor a
+   * reescrevê-la.
    */
   scheduleRetry(now: Date, policy: RetryPolicy): void {
-    const exponent =
-      this._attempts > MAX_BACKOFF_EXPONENT ? MAX_BACKOFF_EXPONENT : this._attempts;
+    // O expoente é a contagem **antes** do incremento, para que a primeira falha
+    // agende no degrau base e não já no dobro dele. `backoffDelayMs` devolve
+    // milissegundo inteiro, que é o que `nextAttemptAt` precisa: a coluna é
+    // `timestamptz` e uma fração de ms não sobreviveria ao round-trip de E-05.
+    const delayMs = backoffDelayMs(this._attempts, policy);
+
     this._attempts += 1;
-
-    const uncapped = policy.baseDelayMs * 2 ** exponent;
-    const capped = uncapped > policy.maxDelayMs ? policy.maxDelayMs : uncapped;
-    const half = capped / 2;
-
-    const jittered = half + policy.random() * half;
-    // Truncagem para milissegundo inteiro: `nextAttemptAt` vira `timestamptz` em
-    // E-05 e uma fração de ms não sobreviveria ao round-trip. Subtrair a parte
-    // fracionária é exato em IEEE-754 e não recorre a `Math.trunc`, que a guarda
-    // de EL-01 bane em todo `src/` — e que aqui não teria como ser liberado sem
-    // abrir a porta para arredondamento de dinheiro no mesmo diretório.
-    const delayMs = jittered - (jittered % 1);
-
     this._nextAttemptAt = new Date(now.getTime() + delayMs);
   }
 }
