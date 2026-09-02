@@ -60,7 +60,7 @@ Representa dinheiro de forma exata e imutável. Toda operação retorna nova ins
 - Transições: `markProcessed`, `markPendingReference`, `reject(code)`, `fail(code)`.
 - Consultas de domínio: `isTerminal`, `affectsBalance` (**false para `LOSS`**), `requiresReference` (**true para `REFUND` e `ROLLBACK`**), `matchesPayload(payloadHash)`, `ledgerDirectionFor(reference?)`.
 - **Grafo de transições fechado** — `[DECIDIDO: D-013]`. `PENDING → {PROCESSED, REJECTED, FAILED, PENDING_REFERENCE}`; `PENDING_REFERENCE → {PROCESSED, REJECTED, FAILED}`. Sem self-loop e sem volta para `PENDING`: o contador de tentativas vive em colunas próprias, não no status.
-- **`FAILED` só em erro permanente de infraestrutura ou esgotamento para DLQ** — `[DECIDIDO: D-013]`. Erro transitório não altera o status.
+- **`FAILED` só em erro permanente de infraestrutura ou esgotamento para DLQ** — `[DECIDIDO: D-013]`. Erro transitório não altera o status. **Quem escreve `FAILED` é E-13, não o consumidor** — `[DECIDIDO: D-047]`: uma falha no consumo faz rollback da transação inteira e não deixa linha onde marcar, porque a transação é inserida já no estado terminal. Só `PENDING_REFERENCE` deixa linha viva, e é ela que E-13 marca ao esgotar o TTL.
 - **`reject` e `fail` aceitam famílias de código distintas, impostas pelo tipo** — `[DECIDIDO: D-007]`. `reject(BusinessFailureCode)` cobre os 11 códigos de negócio; `fail(InfrastructureFailureCode)` cobre os 2 de infraestrutura. A separação de D-013 vira erro de compilação, não convenção.
 - **Referência ausente em `REFUND`/`ROLLBACK` é payload inválido, não rejeição** — `[DECIDIDO: D-020]`. `create` lança `MissingReferenceError` e nenhuma transação nasce; D-006 mapeia para `400`. Ver RN-06.
 
@@ -146,11 +146,17 @@ Submete uma operação de aposta.
 **RF-18 — Consumidor SQS reutiliza o mesmo use case da entrada HTTP.** Não pode existir um caminho de processamento paralelo com regras próprias.
 
 **RF-19 — Deduplicação por inbox persistente** em `(consumerName, messageId)`, imposta por constraint única no banco.
+*Aceite:*
+- **O `messageId` é o do corpo da mensagem**, não o `MessageId` de transporte do SQS — `[DECIDIDO: D-044]`. É o campo que a §10 do enunciado escreve, e o único dos dois estável quando o **produtor** reenvia a mesma operação lógica.
+- **O `consumerName` é constante no código**, não variável de ambiente — `[DECIDIDO: D-045]`. Instâncias com valores divergentes não dariam erro: dariam efeito duplicado em silêncio, que é EL-03.
+- A pré-checagem é o caminho normal da reentrega; quem fecha a janela entre a leitura e o commit é a chave primária `pk_inbox_messages` (RI-09), que aborta a transação perdedora inteira.
 
 **RF-20 — `ack` somente após o commit** da transação financeira.
 
 **RF-21 — Classificação de erro no consumo**
 *Aceite:* erros de **negócio** (terminal → ack), **transitórios** (retry com backoff) e **permanentes** (DLQ) são distinguidos e tratados diferente. `[DECIDIDO: D-008]` — `maxReceiveCount` 5, alinhado à redrive policy; backoff exponencial com jitter; valores sobrescrevíveis por ambiente.
+- **Erro permanente vai à DLQ por envio explícito, na primeira entrega** — `[DECIDIDO: D-046]`. A redrive policy só age depois de 5 entregas; numa fila FIFO, gastá-las com um payload que nunca vai passar bloqueia o `MessageGroupId` inteiro e atrasa agregados sem relação. A redrive policy continua ativa como rede do transitório que não cede — a DLQ tem, portanto, **dois** caminhos de entrada, e os dois são esperados.
+- **O critério não é "negócio vs. infraestrutura", é "deixou rastro ou não deixou"** — `[DECIDIDO: D-048]`. `ack` só para a rejeição que commitou linha `REJECTED` e evento, porque aí o provedor **é** notificado. `WALLET_NOT_FOUND` (D-031), `IDEMPOTENCY_CONFLICT` e `KIND_NOT_SUBMITTABLE` fazem rollback e não deixam linha, evento nem resposta — pela fila não existe o `422` do HTTP —, então vão à DLQ. É desvio deliberado da leitura literal deste requisito, que supõe desfecho sempre observável.
 
 **RF-22 — Shutdown gracioso**: em `SIGTERM`, concluir mensagens em andamento ou devolver a visibilidade. Nenhuma mensagem pode ficar "presa" nem ser perdida.
 

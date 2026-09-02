@@ -66,10 +66,17 @@ export function parseSubmitTransactionRequest(
  * provedor para corrigir o payload em vez de reenviar. Inverter a ordem
  * colapsaria as duas situações no mesmo `400`.
  *
+ * **Exportada porque a fila usa a mesma regra.** RN-13 diz que `OPENING` não pode
+ * ser submetido "nem pela API nem pela fila", e o parser de mensagem de E-11
+ * chama esta função em vez de repetir as duas checagens — duas cópias seriam duas
+ * regras para o mesmo requisito, capazes de divergir numa adição futura ao enum.
+ * O que muda entre as duas bordas é só o destino do erro: `400`/`422` no HTTP,
+ * DLQ na fila (D-046, D-048).
+ *
  * @throws InvalidPayloadError se o kind não existir no enum.
  * @throws KindNotSubmittableError para `OPENING`.
  */
-function parseSubmittableKind(source: Record<string, unknown>): WagerTransactionKind {
+export function parseSubmittableKind(source: Record<string, unknown>): WagerTransactionKind {
   const value = requiredString(source, "kind");
   const kind = KIND_BY_VALUE.get(value);
 

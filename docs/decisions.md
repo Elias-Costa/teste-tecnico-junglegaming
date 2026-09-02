@@ -28,11 +28,11 @@ Registro leve de decisões, estilo ADR. Neste projeto ele tem **três** funçõe
 
 - **Dono de `reference_attempts` e `next_reference_attempt_at`** — aberto por **D-029**. As duas colunas existem no schema desde E-05 e não têm dono no domínio. E-13 escolhe entre levá-las ao agregado (um `scheduleReferenceRetry(now, policy)` reusando o `RetryPolicy` de D-022) ou tratá-las como estado operacional manipulado por `UPDATE` direto, como o lease da outbox em E-10. **Nada até E-12 depende disso:** por D-029, o repositório de E-06 simplesmente não escreve essas colunas, e nenhuma das duas saídas fica mais cara por causa disso.
 
-As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito, **D-033** a **D-039**, expostas por E-08 e resolvidas antes de a borda HTTP ser escrita, e **D-040** a **D-043**, expostas por E-10 e resolvidas antes de o worker ser escrito. **Nenhuma etapa até E-12 está bloqueada.**
+As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito, **D-033** a **D-039**, expostas por E-08 e resolvidas antes de a borda HTTP ser escrita, **D-040** a **D-043**, expostas por E-10 e resolvidas antes de o worker ser escrito, e **D-044** a **D-048**, expostas por E-11 e resolvidas antes de o consumidor ser escrito. **Nenhuma etapa até E-12 está bloqueada.**
 
 **E-09 foi a primeira etapa a não expor decisão nenhuma**, e vale registrar por quê: ela não escreveu código de produção. A prova de concorrência é só teste, e a estratégia que ela verifica — pessimistic `FOR UPDATE` por wallet — já estava decidida em **D-002** desde 2026-09-01. A forma de RT-17 (três processos de sistema operacional subindo o `AppModule` inteiro, em vez de três chamadas ao use case no mesmo processo) também não foi escolha: **RI-08** cobra literalmente "correta com múltiplas **instâncias da aplicação**", e EL-05 é "correta somente com uma instância". Uma etapa sem decisão nova é sinal de que as anteriores foram bem fechadas, não de que alguém deixou de perguntar.
 
-A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022); e como aconteceu em E-05, onde o próprio escopo da etapa registrava duas vias sem escolher entre elas (D-023) e onde **dois documentos já registrados divergiam** sobre a chave da inbox (D-025); e como aconteceu em E-06, onde a rejeição do Custom Type em D-004 já implicava a forma do mapeamento sem que ninguém a tivesse registrado (D-026); e como aconteceu em E-07, onde RN-12 pedia um saldo que **nenhuma coluna guardava** (D-030) e onde **D-007 e o schema de E-05 se contradiziam** sobre `WALLET_NOT_FOUND` (D-031); e como voltou a acontecer em E-08, a etapa que mais expôs decisões de uma vez — **sete** —, incluindo o caso em que **o schema de E-05 tornava impossível** a transação interna que RF-08 exige, por seis colunas NOT NULL sem valor natural na abertura (D-033), e o caso em que **a própria consequência de D-006 não cobria o caminho normal** que E-07 acabara de produzir (D-036); e como aconteceu de novo em E-10, onde o enunciado **nomeia as filas de entrada e nenhuma de saída** (D-040), onde o LocalStack sobe vazio e ninguém tinha o encargo de criar a fila (D-041), e onde **D-008 fixava um limite de tentativas sem dizer o que acontece depois dele** (D-042, que a emenda) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila curta não significa que não vão surgir mais.
+A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022); e como aconteceu em E-05, onde o próprio escopo da etapa registrava duas vias sem escolher entre elas (D-023) e onde **dois documentos já registrados divergiam** sobre a chave da inbox (D-025); e como aconteceu em E-06, onde a rejeição do Custom Type em D-004 já implicava a forma do mapeamento sem que ninguém a tivesse registrado (D-026); e como aconteceu em E-07, onde RN-12 pedia um saldo que **nenhuma coluna guardava** (D-030) e onde **D-007 e o schema de E-05 se contradiziam** sobre `WALLET_NOT_FOUND` (D-031); e como voltou a acontecer em E-08, a etapa que mais expôs decisões de uma vez — **sete** —, incluindo o caso em que **o schema de E-05 tornava impossível** a transação interna que RF-08 exige, por seis colunas NOT NULL sem valor natural na abertura (D-033), e o caso em que **a própria consequência de D-006 não cobria o caminho normal** que E-07 acabara de produzir (D-036); e como aconteceu de novo em E-10, onde o enunciado **nomeia as filas de entrada e nenhuma de saída** (D-040), onde o LocalStack sobe vazio e ninguém tinha o encargo de criar a fila (D-041), e onde **D-008 fixava um limite de tentativas sem dizer o que acontece depois dele** (D-042, que a emenda); e como aconteceu em E-11, onde um **JSDoc escrito em E-04 contradizia o payload do próprio enunciado** sobre qual `messageId` deduplica (D-044), onde **o roteiro descrevia um estado que este sistema não produz** — transação em `PENDING` depois de erro transitório (D-047) — e onde a classificação literal de RF-21 **apagaria três erros de negócio sem deixar rastro nenhum** (D-048) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0. Fila curta não significa que não vão surgir mais.
 
 ---
 
@@ -1025,3 +1025,113 @@ O que se perde é a proteção contra uma linha envenenada girando para sempre. 
 - O par continua sendo escrito e apagado **junto**, sob `ck_outbox_messages_lease_pair` (E-05).
 - O lease é **estado operacional**, manipulado por `UPDATE` direto em `OutboxClaimStore`, e não estado do agregado: `OutboxMessage` segue sem método de liberação. É o mesmo padrão que D-029 oferece como uma das saídas para as colunas de retry de referência em E-13.
 - Falha de publicação **também** solta o lease, junto com o reagendamento: é o agendamento de D-022, e não o prazo do lease, que decide a próxima tentativa. Segurar o lease atrasaria uma retentativa de 1 s pelos 30 s do lease.
+
+---
+
+## D-044 — Chave da inbox: o `messageId` do corpo da mensagem (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-11. RF-19 exige deduplicação por `(consumerName, messageId)` sem dizer **qual** `messageId`. O enunciado (§10) mostra um campo `"messageId": "msg-123"` no corpo da mensagem; o SQS devolve, à parte, um `MessageId` de transporte. Pior: o JSDoc de `InboxMessage`, escrito em E-04, afirmava que era o do SQS — uma escolha que nunca passou por esta fila e que contradiz o payload do próprio enunciado.
+
+**Opções:**
+- **`messageId` do corpo** — o campo que o enunciado nomeia, controlado pelo produtor.
+- **`MessageId` do SQS** — id de transporte, atribuído no `SendMessage`.
+
+**Decisão:** o **`messageId` do corpo**. Envelope sem esse campo é payload inválido, e payload inválido é erro permanente (D-046).
+
+**Justificativa:** os dois cobrem a redelivery — o SQS preserva o `MessageId` quando o visibility timeout vence —, mas só o do corpo cobre o **reenvio do produtor**, que gera `MessageId` novo para a mesma operação lógica. Com o id de transporte, esse caso cairia inteiro sobre a `idempotencyKey`; com o do corpo, a inbox e a idempotência protegem em camadas diferentes, que é o que RI-03 pede ao dizer que a consistência não se apoia no SQS. Ele também é o único dos dois que o enunciado escreve explicitamente, e divergir do payload publicado seria uma diferença que nenhum avaliador tem como adivinhar.
+
+**Consequências:**
+- O JSDoc de `messageId` em `src/domain/inbox-message.ts` e o de `InboxContext` em `src/application/process-wager-transaction.ts` **estavam errados** e foram corrigidos nesta etapa. Nenhuma linha de comportamento mudou: o campo sempre foi opaco para a entidade.
+- O `messageId` do corpo é **entrada não confiável** e passa pelas mesmas primitivas de D-038 que qualquer outro campo de texto — inclusive o limite de 120 caracteres, que é a largura de `inbox_messages.message_id` no schema de E-05.
+- O `MessageId` de transporte continua sendo lido, mas só para diagnóstico: ele não entra em chave nenhuma.
+- Um produtor que reutilize o mesmo `messageId` para operações **diferentes** tem a segunda silenciada. É o preço da escolha, e a proteção contra isso é a `idempotencyKey` — que continua sendo a fonte da verdade da idempotência por RF-14. Registrar em `ARCHITECTURE.md`.
+
+---
+
+## D-045 — `consumerName`: constante no código (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-11. `(consumerName, messageId)` é a chave primária da inbox desde D-025, mas nenhum documento jamais disse **qual valor** o consumidor usa.
+
+**Opções:**
+- **Constante exportada de um módulo só.**
+- **Variável de ambiente** (`SQS_CONSUMER_NAME`) com default, no padrão de D-008/D-011.
+- Derivado do nome da fila.
+
+**Decisão:** constante `WAGER_TRANSACTIONS_CONSUMER = "wager-transactions-consumer"`, em `src/interface/messaging/consumer-name.ts`.
+
+**Justificativa:** o modo de falha aqui é assimétrico. Todas as instâncias precisam usar o **mesmo** valor, senão a dedupe deixa de valer entre instâncias — e o sintoma não é erro, é **efeito duplicado em silêncio**, que é literalmente EL-03. Uma variável de ambiente transforma esse risco em algo que um `docker-compose.override.yml` esquecido pode disparar. É o caso raro em que a configurabilidade que D-008 e D-011 defendem trabalha contra o requisito: aqueles dois parametrizam **números de ajuste**, e este é uma **identidade**.
+
+**Consequências:**
+- A dedupe continua sendo por consumidor (a mesma mensagem entregue a dois consumidores diferentes é trabalho legítimo dos dois, como D-025 registra), mas hoje só existe um consumidor.
+- Um segundo grupo de consumidores, se algum dia existir, acrescenta **outra constante** — mudança de código revisada, não de ambiente.
+- O valor aparece em `ARCHITECTURE.md`: é ele que um operador precisa conhecer para ler a tabela `inbox_messages`.
+
+---
+
+## D-046 — Erro permanente vai à DLQ por envio explícito (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-11, e uma emenda prática a D-008. RF-21 manda distinguir **permanente (DLQ)** de **transitório (retry)**; D-008 fixou `maxReceiveCount` 5 "alinhado à redrive policy". Mas a redrive policy só age **depois de 5 entregas** — se ela for o único caminho, permanente e transitório terminam no mesmo lugar, pelo mesmo tempo, e a distinção de RF-21 fica sem efeito observável.
+
+**Opções:**
+- **Envio explícito à DLQ + delete** na primeira entrega, com a redrive policy mantida como rede.
+- **Só a redrive policy**: qualquer falha devolve a mensagem, e o SQS a move na 5ª entrega.
+- **Só envio explícito**, sem redrive policy.
+
+**Decisão:** **envio explícito + delete** para o erro permanente; redrive policy de D-008 mantida e de fato aplicada na fila, como rede do transitório que não cede.
+
+**Justificativa:** a fila de entrada é **FIFO**, e numa fila FIFO uma mensagem presa bloqueia o `MessageGroupId` inteiro até ser resolvida. Gastar cinco entregas com um payload que nunca vai passar não é só desperdício: atrasa operações de **outros agregados** que estejam atrás dela no mesmo grupo, que é a mesma patologia que RI-06 proíbe do lado do banco. Manter a redrive policy junto é o que garante que nada fique tentando para sempre — a alternativa "só explícito" deixaria um transitório permanente (banco que não volta) num laço infinito.
+
+A ordem é **enviar à DLQ e só então apagar da origem**: uma duplicata na DLQ é recuperável por quem a inspeciona, uma mensagem perdida não é.
+
+**Consequências:**
+- `ensureQueue` (D-041) ganha a criação da DLQ e o atributo `RedrivePolicy`, continuando fonte única de nome e atributos. A DLQ é FIFO como a origem — o SQS exige que o par tenha o mesmo tipo.
+- O consumidor precisa de `MessageGroupId` e `MessageDeduplicationId` ao reenviar. O grupo é o **original**, para a DLQ preservar o agrupamento por agregado; o dedup id é o `MessageId` **de transporte**, e não o `messageId` do corpo de D-044 — o caso mais comum de erro permanente é justamente o payload que não abre, e ali o corpo não tem id nenhum para oferecer.
+- `maxReceiveCount` 5 entra no módulo de retry de D-008, junto dos parâmetros da outbox — não em módulo novo.
+- **Consequência aceita:** uma mensagem pode chegar à DLQ por dois caminhos distintos. Documentar em `ARCHITECTURE.md` que os dois são esperados, e o que cada um significa para quem lê a DLQ.
+
+---
+
+## D-047 — `FAILED` não tem emissor em E-11 (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-11, na forma de uma contradição entre documento e código. D-013 estabelece que `FAILED` é escrito "em erro permanente de infraestrutura ou esgotamento para DLQ", e o roteiro de E-11 dizia que erro transitório "deixa a transação em `PENDING`". Nenhuma das duas coisas é possível hoje: E-07 insere a `WagerTransaction` **já no estado terminal**, dentro da transação — então uma falha faz rollback e **não deixa linha nenhuma**, nem em `PENDING` nem em lugar algum.
+
+**Opções:**
+- **Nenhum emissor em E-11**: falha permanente não deixa linha, e o registro é a DLQ.
+- **Gravar `FAILED` em transação própria** ao mandar para a DLQ, para dar rastro consultável por RF-12.
+
+**Decisão:** **E-11 não escreve `FAILED`.** D-013 continua íntegra e ganha emissor em E-13, onde uma transação em `PENDING_REFERENCE` que esgota o TTL de D-008 **existe** e pode ser marcada.
+
+**Justificativa:** gravar `FAILED` numa segunda transação criaria uma escrita de dinheiro fora da transação de dinheiro — e uma que ocupa a `idempotencyKey`. O reenvio legítimo daquela mesma operação, depois de o defeito ser corrigido, passaria a responder replay de uma falha em vez de processar: a linha de auditoria teria transformado um incidente recuperável em perda definitiva. Além disso, o caso mais comum de erro permanente é payload malformado, que por definição **não tem como virar agregado**, então nem sempre haveria o que gravar.
+
+**Consequências:**
+- **O texto de E-11 em `docs/implementation-plan.md` foi corrigido:** o critério não é "a transação fica em `PENDING`", é "**nenhuma** transação é escrita". A prova é por ausência de linha, que é mais forte.
+- O item de escopo "`FAILED` só em erro permanente ou esgotamento para DLQ" fica **atendido por vacuidade** em E-11 e passa a ser exercido em E-13. Nenhum caminho desta etapa escreve `FAILED`, e é isso que o teste fixa.
+- `InfrastructureFailureCode` continua existindo e sem uso até E-13. É deliberado: o enum foi fechado em D-007 e o compilador já impede que um código de infraestrutura entre em `reject()`.
+- Registrar em `ARCHITECTURE.md` como limitação conhecida: uma mensagem que vai à DLQ **não deixa rastro no banco**. Quem investiga olha a DLQ e o log, não a tabela de transações.
+
+---
+
+## D-048 — Erro de negócio sem rastro vai à DLQ (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-11. RF-21 classifica erro de negócio como **terminal → ack**. Mas os erros de negócio deste sistema se dividem em dois grupos com consequências muito diferentes: `INSUFFICIENT_FUNDS` e `CURRENCY_MISMATCH` **commitam** uma linha `REJECTED` e publicam `WagerTransactionRejected`; já `WALLET_NOT_FOUND` (D-031), `IDEMPOTENCY_CONFLICT` (RN-14) e `KIND_NOT_SUBMITTABLE` (RN-13) fazem rollback e não deixam **nada** — e, vindo pela fila, não existe o `422` do HTTP para responder.
+
+**Opções:**
+- **DLQ para os que não deixam rastro**, ack para os que deixam.
+- **Ack para todo erro de negócio**, na leitura literal de RF-21.
+- Fazer os três deixarem rastro, gravando `REJECTED` também para eles.
+
+**Decisão:** `ack` **apenas** quando a rejeição commitou linha e evento; os três que não deixam rastro vão para a **DLQ**.
+
+**Justificativa:** o `ack` de RF-21 é seguro porque a rejeição de negócio **já comunicou** o desfecho — pela resposta HTTP ou pelo evento `WagerTransactionRejected`. Onde não há linha, nem evento, nem resposta, o ack não fecha o assunto: ele apaga a mensagem. Uma aposta para wallet inexistente sumiria sem deixar traço consultável em lugar nenhum, e o provedor descobriria pela ausência do dinheiro. A DLQ é onde alguém olha, e é a única superfície que sobra.
+
+A terceira opção foi descartada porque reabriria D-031: `WALLET_NOT_FOUND` **não pode** virar linha — a chave estrangeira de `wallet_id` impede, e foi exatamente esse fato que decidiu D-031.
+
+**Consequências:**
+- A classificação do consumidor não é "negócio vs. infraestrutura", é "**deixou rastro vs. não deixou**". É essa a frase que vai ao `ARCHITECTURE.md`, porque é ela que explica as duas metades de uma vez.
+- Desvio deliberado da leitura literal de RF-21, e precisa ser apresentado como tal: o enunciado supõe que erro de negócio sempre produz desfecho observável, e neste desenho três deles não produzem.
+- `IDEMPOTENCY_CONFLICT` na DLQ é o sinal mais valioso dos três: significa que o provedor reusou uma `idempotencyKey` com payload diferente, que é bug do lado dele.

@@ -13,6 +13,7 @@
 import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { SQSClient } from "@aws-sdk/client-sqs";
+import { readRetryEnv } from "../../src/infrastructure/config/retry-env.ts";
 import { readSqsEnv } from "../../src/infrastructure/config/sqs-env.ts";
 import { ensureQueue } from "../../src/infrastructure/messaging/sqs-queue-provisioner.ts";
 
@@ -48,12 +49,16 @@ const started = (async () => {
   process.env.AWS_ACCESS_KEY_ID = "test";
   process.env.AWS_SECRET_ACCESS_KEY = "test";
 
-  // A fila de saída de D-040, criada pelo MESMO `ensureQueue` que o worker usa
-  // (D-041). O container do LocalStack sobe vazio, e o Compose também não cria
-  // fila nenhuma — se este preload criasse a fila com um script próprio, nome e
-  // atributos passariam a ter duas fontes de verdade que precisariam concordar.
+  // As filas de D-040 (saída) e de §10 (entrada + DLQ), criadas pelo MESMO
+  // `ensureQueue` que o worker e o consumidor usam (D-041). O container do
+  // LocalStack sobe vazio, e o Compose também não cria fila nenhuma — se este
+  // preload criasse as filas com um script próprio, nome e atributos passariam a
+  // ter duas fontes de verdade que precisariam concordar.
   const env = readSqsEnv();
+  const retry = readRetryEnv();
   process.env.SQS_EVENTS_QUEUE = env.eventsQueueName;
+  process.env.SQS_TRANSACTIONS_QUEUE = env.transactionsQueueName;
+  process.env.SQS_TRANSACTIONS_DLQ = env.transactionsDlqName;
 
   const sqs = new SQSClient({
     region: env.region,
@@ -63,6 +68,15 @@ const started = (async () => {
 
   try {
     await ensureQueue(sqs, env.eventsQueueName);
+    // A fila de entrada nasce com a redrive policy de D-008/D-046. Criá-la aqui
+    // sem ela deixaria RT-12 provando metade do requisito: o envio explícito
+    // funcionaria e o esgotamento de entregas não teria para onde ir.
+    await ensureQueue(sqs, env.transactionsQueueName, {
+      deadLetter: {
+        queueName: env.transactionsDlqName,
+        maxReceiveCount: retry.consumerMaxReceiveCount,
+      },
+    });
   } finally {
     sqs.destroy();
   }

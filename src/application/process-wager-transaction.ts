@@ -29,7 +29,7 @@ import type { TransactionalRepositories, UnitOfWork } from "./ports/unit-of-work
  */
 export interface InboxContext {
   consumerName: string;
-  /** `MessageId` do SQS, não um id nosso. */
+  /** `messageId` do **corpo** da mensagem (D-044), não o id de transporte do SQS. */
   messageId: string;
 }
 

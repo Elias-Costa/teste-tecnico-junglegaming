@@ -1,6 +1,13 @@
 /** Dados de uma mensagem recém-recebida da fila (RF-05, §6.5). */
 export interface ReceiveInboxProps {
-  /** Id da mensagem **no transporte** (SQS `MessageId`), não um id nosso. */
+  /**
+   * Id que o **produtor** carimbou no corpo da mensagem (D-044).
+   *
+   * É o campo `messageId` do envelope que o enunciado (§10) publica, e não o
+   * `MessageId` que o SQS atribui no envio: os dois cobrem a redelivery, mas só
+   * o do corpo é estável quando o **produtor** reenvia a mesma operação lógica.
+   * O id de transporte serve a diagnóstico e não entra em chave nenhuma.
+   */
   messageId: string;
   /** Quem consumiu. A dedupe é por consumidor, não global (RF-19). */
   consumerName: string;
