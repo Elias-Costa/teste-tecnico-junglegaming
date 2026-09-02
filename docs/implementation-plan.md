@@ -8,9 +8,9 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 
 ## Estado atual
 
-> **E-00 a E-08 CONCLUÍDAS** (E-08 em 2026-09-02). Stack validada de ponta a ponta, fundação de pé, núcleo de negócio fechado com teste, camada de mensageria do domínio pronta, schema no banco com as garantias de RI-09, os cinco agregados indo e voltando do PostgreSQL real, o caminho do dinheiro fechado numa transação SQL única com atomicidade provada contra falha real do banco, e **os dois endpoints de escrita de pé, com as cinco situações de RF-15 em cinco códigos distintos**.
-> `bun run check` = typecheck limpo, lint limpo, **236 unitários verdes**. `bun run check:full` = mais **102 de integração**, autoprovisionados.
-> **Etapa atual: E-09 — PROVA DE CONCORRÊNCIA (meta do dia 1).**
+> **E-00 a E-09 CONCLUÍDAS** (E-09 em 2026-09-02). Stack validada de ponta a ponta, fundação de pé, núcleo de negócio fechado com teste, camada de mensageria do domínio pronta, schema no banco com as garantias de RI-09, os cinco agregados indo e voltando do PostgreSQL real, o caminho do dinheiro fechado numa transação SQL única com atomicidade provada contra falha real do banco, os dois endpoints de escrita de pé com as cinco situações de RF-15 em cinco códigos distintos, e — **a meta do dia 1** — **a concorrência provada por comportamento, com três instâncias da aplicação em processos separados disputando a mesma wallet**.
+> `bun run check` = typecheck limpo, lint limpo, **236 unitários verdes**. `bun run check:full` = mais **102 de integração** e **8 de concorrência**, autoprovisionados.
+> **Etapa atual: E-10 — WORKER DA OUTBOX (dia 2).**
 >
 > **Achados do spike que valem para todas as etapas seguintes:**
 > - MikroORM v7 **não tem decorators** — mapeamento por `EntitySchema`. Isso torna a fronteira domínio/ORM estrutural em vez de convencional.
@@ -84,6 +84,15 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 > - **A fronteira de lint agora cobre `src/interface/**`** (veto a `@aws-sdk/*`). O MikroORM continua permitido lá, porque é a camada que monta o grafo de dependências.
 > - **`registerRequestContext: false`** no `MikroOrmModule`: o middleware de identity map por requisição é justamente o que D-028 removeu. Ligá-lo reexporia o ledger ao `P0001` da trigger de D-023.
 > - **RN-11 tem prova de ponta a ponta agora:** rejeição por saldo insuficiente responde `422` com corpo de RF-13 e **zero** lançamentos no ledger.
+>
+> **O que E-09 deixou para as etapas seguintes:**
+> - **`expectLedgerReconciles` é o único lugar que responde à invariante da §6.4.** Está em `tests/support/concurrency-harness.ts` e vale para **todo** teste, não só os de concorrência: RT-18, RT-19 e RT-21 fecham por ele. Reimplementar a reconciliação em cada arquivo é transformar um requisito em quatro requisitos parecidos.
+> - **`tests/support/app-instance.ts` é o embrião do `main.ts` de E-14** e hoje é o único lugar do repositório que **sobe o processo** — `NestFactory.create(AppModule)` + `listen`. Quando E-14 escrever o bootstrap de verdade, ele não substitui este arquivo: RT-17 continua precisando de um alvo que anuncie a porta no stdout e encerre pelo stdin. O que E-14 pode fazer é o inverso — o `main.ts` passar a ser o que este arquivo importa.
+> - **`Bun.spawn` + handshake por linha no stdout é o padrão de teste multi-instância deste repositório.** E-10 (dois publishers disputando a mesma outbox, RT-19) e E-11 (worker morto entre commit e ack, RT-18) precisam do mesmo formato. `sleep` não serve: a sincronização é por anúncio, não por relógio.
+> - **Cada instância abre o seu pool, e o `pg` usa `max: 10` por padrão** (nenhum `pool` é configurado em `orm-config.ts`). Três instâncias mais a suíte já somam ~40 conexões. Qualquer teste que **segure** N transações abertas ao mesmo tempo tem esse teto como limite real — é por isso que a barreira de RT-16 usa 5 participantes e não 50. **Não é decisão pendente**, é um número a lembrar antes de escrever o próximo teste que segura conexão.
+> - **A ordem "lock antes da consulta de idempotência" (E-07) está agora amarrada por teste.** RT-14 exige **1 aplicação e 49 replays**; se alguém inverter as duas linhas do use case, as submissões passam a disputar o `insert` e o número muda. O `UNIQUE` continuaria segurando a invariante — o teste é o que denuncia a degradação antes de ela virar `409` no caminho normal.
+> - **A semeadura dos testes de concorrência não passa por `OpenWallet`**, de propósito: o use case publicaria os dois eventos de D-034 e a contagem de linhas de outbox deixaria de significar "eventos das apostas". Quem escrever teste de E-10 sobre a outbox vai querer o mesmo cuidado, ou pelo caminho oposto — semear pela API e contar a partir de uma linha de base conhecida.
+> - **Nenhuma linha de `src/` mudou em E-09.** A etapa é só de teste, e isso é resultado, não coincidência: significa que o desenho de concorrência de D-002 estava certo desde E-06 e só faltava prová-lo.
 >
 > **Decisões em vigor:** D-001 MikroORM **sem plano B** · D-003 `Money` sobre **`bigint` de centavos** · D-004 coluna **`numeric(19,2)`** + mapper próprio · D-007 (13 `failureCode` fechados) · D-009 (outbox por claim com lease) · D-011 infra de teste **híbrida** · D-012 auth **não implementada** · D-013 (grafo sem self-loop; `FAILED` só em erro permanente ou DLQ) · D-014 (ids UUIDv7, cursor keyset de coluna única) · D-015 (escala de entrada exatamente 2 casas) · D-016 (`currency` validada por forma `[A-Z]{3}`, sem tabela ISO) · D-017 (`equals` lança em moeda diferente) · **D-018** (`debit`/`credit` devolvem o lançamento) · **D-019** (saldo insuficiente: consulta + guarda) · **D-020** (referência ausente é payload inválido) · **D-021** (movimentação exige valor estritamente positivo) · **D-022** (backoff equal jitter, política injetada na chamada) · **D-023** (imutabilidade do ledger por trigger) · **D-024** (unicidade de reversão parcial sobre `PROCESSED`) · **D-025** (PK composta na inbox; alcance de D-014 corrigido) · **D-026** (mapeamento por modelos de linha + mapper, não sobre as classes de domínio) · **D-027** (interfaces de repositório no domínio) · **D-028** (escrita por comando explícito, sem Unit of Work) · **D-029** (colunas de retry de referência sem dono até E-13) · **D-030** (saldo observado em coluna própria) · **D-031** (`WALLET_NOT_FOUND` é erro de aplicação, sem linha e sem evento) · **D-032** (`payloadHash` calculado no use case) · **D-033** (sentinelas internas na `OPENING`) · **D-034** (abertura publica os dois eventos) · **D-035** (duplicata de wallet traduzida no repositório) · **D-036** (desfecho é resultado, não exceção — emenda D-006) · **D-037** (`503` por lista de SQLSTATE; não mapeado é `500`) · **D-038** (parser artesanal, sem biblioteca de validação) · **D-039** (`correlationId` por header com fallback).
 >
@@ -287,13 +296,16 @@ Esta é a etapa mais importante do desafio. Quatro das oito eliminatórias morre
 
 **Ler antes:** RNF-01..RNF-05, EL-02, EL-03, EL-05, RT-14..RT-17.
 **Escopo:**
-- [ ] RT-15 — cenário obrigatório da §8: `100.00`, duas apostas de `80.00` simultâneas → uma `PROCESSED`, uma `REJECTED`, saldo `20.00`, **exatamente um** débito no ledger.
-- [ ] RT-14 — a mesma aposta 50 vezes em paralelo → um único débito.
-- [ ] RT-16 — wallets distintas em paralelo, sem contenção mútua.
-- [ ] RT-17 — **≥ 3 processos** simultâneos, com paralelismo real (não mocks sequenciais).
-- [ ] Invariante final verificada em todos: `wallet.balance == saldo reconstruído pelo ledger`.
+- [x] RT-15 — cenário obrigatório da §8: `100.00`, duas apostas de `80.00` simultâneas → uma `PROCESSED`, uma `REJECTED`, saldo `20.00`, **exatamente um** débito no ledger. — `tests/concurrency/same-wallet-contention.test.ts`, **10 rodadas** por execução, com wallet nova em cada uma.
+- [x] RT-14 — a mesma aposta 50 vezes em paralelo → um único débito. — mesmo arquivo; 50 respostas com o mesmo `transactionId`, **uma** aplicação e 49 replays.
+- [x] RT-16 — wallets distintas em paralelo, sem contenção mútua. — `tests/concurrency/distinct-wallets.test.ts`, por barreira de 5 participantes, **com controle negativo**.
+- [x] RT-17 — **≥ 3 processos** simultâneos, com paralelismo real (não mocks sequenciais). — `tests/concurrency/multi-instance.test.ts`: três `Bun.spawn` de `tests/support/app-instance.ts`, cada um subindo o `AppModule` de produção em porta própria.
+- [x] Invariante final verificada em todos: `wallet.balance == saldo reconstruído pelo ledger`. — `expectLedgerReconciles` em `tests/support/concurrency-harness.ts`, o único ponto que responde a essa pergunta.
+- [x] **Fora do previsto:** um **controle negativo** para a barreira de RT-16. Sem ele, a prova de ausência de lock global passaria mesmo se a barreira fosse decorativa.
 
-**Critério de conclusão:** os quatro testes verdes, executados repetidamente (mínimo 10 execuções) sem flake.
+**Critério de conclusão:** os quatro testes verdes, executados repetidamente (mínimo 10 execuções) sem flake. — **atendido**: 8 testes, **10 execuções seguidas** de `bun test tests/concurrency` contra o Compose, `8 pass / 0 fail` em todas, mais a execução autoprovisionada de `bun run check:full`.
+
+**A prova tem dentes, e isso foi verificado por sonda.** Removido o `LockMode.PESSIMISTIC_WRITE` de `findByIdForUpdate` (D-002) e nada mais, **5 dos 8 testes falham**: RT-15 nas duas formas, RT-14, o controle negativo de RT-16 e RT-17 — este último aceitando **as 30 apostas** de `20.00` sobre `100.00` de saldo, com o `CHECK (balance >= 0)` intacto, porque *lost update* deixa a coluna em `80.00` e a mentira inteira no ledger. É o desenho de EL-02 e EL-03 acontecendo, e a razão de a invariante da §6.4 não ser opcional: sem ela, o saldo sozinho não denuncia nada. `src/` voltou byte a byte ao que era.
 
 ---
 
