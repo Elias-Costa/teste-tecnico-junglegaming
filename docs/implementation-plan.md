@@ -12,7 +12,9 @@ Documentos-fonte: `docs/desafio-original.md` (enunciado), `docs/requirements.md`
 > `bun run check` = typecheck limpo, lint limpo, **307 unitários verdes**. `bun run check:full` = mais **199 de integração** e **13 de concorrência**, autoprovisionados — **três execuções seguidas, sem flake**. Os três testes somados depois de E-17 são da 2ª revisão adversarial: dois de borda (`walletId` sem forma de UUID, na entrada HTTP e na da fila) e um de laço (o worker de RF-26 esperando quando o ciclo inteiro falha).
 > **E-17 CONCLUÍDA** (2026-09-03), **menos o congelar, que é do mantenedor.** Os dois entregáveis de RNF-08 existem: `README.md` **validado por execução num clone limpo** — não escrito de memória — e `ARCHITECTURE.md` com as 64 decisões curadas por tema, o desenho de auth não implementada (D-012) e **24 limitações conhecidas**. A varredura das oito eliminatórias virou a §3 de `ARCHITECTURE.md`, com mecanismo e arquivo de prova para cada uma. **A 1ª revisão adversarial rodou em 2026-09-03**, em sessão limpa, e os cinco achados dela estão resolvidos — nenhum tocava dinheiro, saldo, idempotência ou publicação de evento. O quinto expôs **`D-064`**, fechada no mesmo dia sem tocar produção. O que fica com o mantenedor: a decisão de congelar.
 > **A 2ª revisão adversarial rodou em 2026-09-03**, também em sessão limpa, sobre `src/` inteiro. Quatro achados, **nenhum tocando dinheiro, saldo, idempotência ou publicação de evento**, e — ao contrário da 1ª — **nenhuma decisão nova**: três eram defeitos contra decisões que já estavam registradas, e o quarto era uma decisão registrada sendo cumprida. Corrigidos: (1) **`walletId` do corpo não era validado como UUID** — o único campo de corpo que vira comparação com coluna `uuid`, então um id malformado morria no `22P02` do PostgreSQL, que D-037 não mapeia, e virava `500` para o que RF-15 (a) define como `400`; a primitiva `requiredUuid` fechou isso nas **duas** bordas, e um UUID bem formado e inexistente segue sendo `422 WALLET_NOT_FOUND` (D-031). (2) **O `PendingReferenceWorker` girava sem pausa** quando o lote inteiro falhava: como a falha deliberadamente não reagenda, a varredura seguinte devolvia as mesmas linhas e o laço martelava um PostgreSQL que já estava fora — o oposto de RNF-05; `idle` passou a ler `scanned === failed` como "não avançou". (3) **`SqsWagerConsumer.close()` não tinha chamador nenhum** em `src/` nem em `tests/`, e o pool de sockets do consumidor sobrevivia ao `close()` da aplicação (RF-22). O quarto — a reconciliação segurando o lock da wallet durante a varredura inteira do ledger — **não mudou código**: é o custo que **D-057** aceitou por escrito, e o mantenedor decidiu mantê-lo; o que faltava era ele aparecer em `ARCHITECTURE.md` §6, onde o avaliador lê as limitações. São **25 limitações conhecidas**.
-> **Etapa atual: nenhuma.** O roteiro acabou. **Nenhuma decisão em aberto; nenhuma etapa bloqueada.** A última — **`D-064`**, exposta pela 1ª revisão adversarial — foi fechada em 2026-09-03 **sem tocar código de produção**: `FAILED` não tem emissor nenhum, D-047 previa que ganharia um em E-13, e o que decidiu foi a §7.1 do enunciado, que escreve `REJECTED` para o esgotamento do TTL. O comportamento atual já era o conforme; a correção foi de documento. A 2ª rodada não abriu nenhuma decisão nova.
+> **A avaliação do repositório contra o enunciado rodou em 2026-09-03** e fechou em **97/100**, **sem nenhuma falha eliminatória**: as oito foram verificadas uma a uma antes de qualquer pontuação, com `bun run check` e `bun run check:full` executados pelo avaliador. Os três pontos descontados viraram **E-18, E-19 e E-20**, todos concluídos no mesmo dia. E-18 tirou a reconciliação de baixo do lock da wallet e a pôs sob snapshot `read only` (**`D-065`**, que emenda D-057 — a reabertura só se pagou porque trouxe fato novo: o `read only` faz do "não corrige silenciosamente" de RF-16 uma recusa do banco, coisa que o lock nunca comprou). E-19 tirou a decisão de reversão e a emissão de eventos de `ProcessWagerTransaction`, que foi de **853 para 673 linhas** sem que **nenhum** teste mudasse de asserção (**`D-066`**). E-20 não mudou comportamento: o mantenedor **manteve D-064**, e o que faltava era a reserva de `FAILED` aparecer no enum e na §4.5 de `ARCHITECTURE.md`, não só nas limitações. `bun run check` = **307 unitários**; `bun run check:full` = **214** de integração e concorrência (dois novos, ambos de E-18).
+>
+> **Etapa atual: nenhuma.** O roteiro acabou. **Nenhuma decisão em aberto; nenhuma etapa bloqueada.** Antes de E-18/E-19, a última decisão era **`D-064`**, exposta pela 1ª revisão adversarial e fechada em 2026-09-03 **sem tocar código de produção**: `FAILED` não tem emissor nenhum, D-047 previa que ganharia um em E-13, e o que decidiu foi a §7.1 do enunciado, que escreve `REJECTED` para o esgotamento do TTL. O comportamento atual já era o conforme; a correção foi de documento. A 2ª rodada não abriu nenhuma decisão nova.
 >
 > **Achados do spike que valem para todas as etapas seguintes:**
 > - MikroORM v7 **não tem decorators** — mapeamento por `EntitySchema`. Isso torna a fronteira domínio/ORM estrutural em vez de convencional.
@@ -486,6 +488,47 @@ Esta é a etapa mais importante do desafio. Quatro das oito eliminatórias morre
 - [x] Varredura final das oito eliminatórias: para cada EL-XX, apontar o teste que prova sua ausência. — §3 de `ARCHITECTURE.md`, com mecanismo **e** arquivo para cada uma. Mora no arquivo em vez de só na resposta: quem avalia lê o repositório.
 - [x] **Fora do previsto, por decisão do mantenedor:** unificar `aguardar`, a duplicação que E-16 deixou registrada em `tests/integration/workers-module.test.ts`. As duas cópias **não eram equivalentes** — a local devolvia `boolean`, a canônica lança —, então o caso negativo não podia virar `aguardar`: não se prova ausência procurando presença. Ele passou a janela de graça + leitura direta, e o positivo passou à `aguardar` de `tests/support/concurrency-harness.ts`.
 - [ ] Congelar. Nenhuma feature nova. — do mantenedor, na leitura do diff.
+
+---
+
+# Rodada de correção — os três achados da avaliação
+
+A avaliação do repositório contra `docs/desafio-original.md` (2026-09-03) fechou em **97/100**, sem eliminatória nenhuma, e descontou um ponto em cada uma de três áreas. As etapas abaixo são a resposta a esses três achados — **não** são features novas, e nenhuma delas amplia escopo.
+
+## E-18 — Reconciliação sob snapshot read-only
+
+**Ler antes:** RF-16, RI-06, D-002, D-057, D-065.
+**Escopo:**
+- [x] Registrar **D-065** antes de tocar em `src/` — reabertura de D-057 com fato novo: a transação de snapshot pode ser aberta `read only`. — `docs/decisions.md`, entrada nova (emenda não reescreve a decisão anterior), com a nota de superação em D-057 e na fila.
+- [x] `UnitOfWork` ganha `runSnapshot` e o tipo `ReadOnlyRepositories` (`wallets` + `ledger`). — o recorte é o ponto: quem lê sob snapshot não recebe inbox nem outbox, e a restrição aparece no compilador antes de aparecer no banco.
+- [x] `MikroUnitOfWork.runSnapshot` = `em.transactional(cb, { isolationLevel: REPEATABLE_READ, readOnly: true })`. — API conferida no `@mikro-orm/core@7.1.14` e no `@mikro-orm/sql` instalados (`AGENTS.md` §2.1), não de memória: `TransactionOptions` tem os dois campos e o driver emite `set transaction isolation level` e `setAccessMode('read only')`.
+- [x] `ReconcileWallet` passa a `runSnapshot` + `findById`. — o laço de páginas e a aritmética por `Money` ficam como estavam.
+- [x] Dois testes em `tests/integration/http-read-api.test.ts`. — (1) a reconciliação responde **enquanto outra transação segura o `FOR UPDATE`** da mesma wallet, com o teste esperando o lock estar tomado antes de chamar, para não passar por corrida; (2) um `UPDATE` dentro de `runSnapshot` morre em `25006`.
+
+**Critério de conclusão:** o caminho do dinheiro deixa de ser bloqueado pela auditoria, e "divergência não é corrigida silenciosamente" (RF-16) passa a ser recusa do PostgreSQL em vez de promessa do código. — **atendido**.
+
+## E-19 — Fatiar `ProcessWagerTransaction`
+
+**Ler antes:** RN-04..RN-10, RF-25, D-051, D-054, D-066.
+**Escopo:**
+- [x] Registrar **D-066** antes de tocar em `src/`, com a condição de forma: a política **decide e não aplica**. — `docs/decisions.md`.
+- [x] `src/application/reversal-policy.ts` — `decideReversal` devolve `ReversalVerdict` (`wait` / `reject` com código / `apply` com direção e id da referência). — a ordem de D-051 e a matriz de RN-08 mudam de arquivo, não de conteúdo. `INSUFFICIENT_FUNDS_ON_REVERSAL` **fica** no use case: depende do saldo da wallet travada, não da referência.
+- [x] `src/application/outbox-event-recorder.ts` — `OutboxEventRecorder`, com o `IdGenerator` no construtor e o `OutboxRepository` por parâmetro. — o repositório não pode ir para o construtor: o que vale é o ligado à transação em curso (D-028).
+- [x] `src/application/transaction-outcome.ts` — o tipo que os três compartilham.
+- [x] `ProcessWagerTransaction` fica com a orquestração e ganha `applyReversal`, que traduz veredito em efeito. — **853 → 673 linhas**; nenhum teste de integração ou concorrência mudou de asserção, que era o critério.
+- [x] `OpenWallet` **intocado**, com a sua cópia de `enqueue`. — unificar é refatoração fora do achado (`AGENTS.md` §3); a duplicação ficou registrada em D-066.
+
+**Critério de conclusão:** o use case deixa de decidir reversão e de montar evento, sem que nenhum comportamento mude. — **atendido**.
+
+## E-20 — `FAILED`: a reserva aparece no código
+
+**Ler antes:** §6.3 do enunciado, D-013, D-047, D-064.
+**Escopo:**
+- [x] Levar o achado ao mantenedor como reabertura de D-064. — decidido **manter**: o raciocínio de D-064 (o TTL é `REJECTED` por força da §7.1; gravar `FAILED` numa segunda transação ocuparia a `idempotencyKey`) continua de pé, e o custo real da alternativa é uma perda definitiva onde hoje há um incidente recuperável. **Nenhuma decisão nova.**
+- [x] `WagerTransactionStatus.Failed` e `InfrastructureFailureCode` ganham JSDoc dizendo que são **reservados, sem emissor nesta entrega**, e por quê. — eram o único membro do enum sem comentário e o único enum cuja ausência de uso não estava escrita onde alguém a encontra.
+- [x] `ARCHITECTURE.md` §4.5 ganha parágrafo próprio. — antes o fato só existia em §6 (limitações) e em `docs/decisions.md`; quem avalia lê a seção de decisões primeiro.
+
+**Critério de conclusão:** a lacuna de auditoria continua existindo e passa a estar declarada onde o leitor a encontra — no enum, na seção de mensageria e nas limitações. — **atendido**.
 
 ---
 

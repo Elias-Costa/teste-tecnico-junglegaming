@@ -2,7 +2,7 @@
 
 Decisões, trade-offs e limitações conhecidas do **Distributed Wagering Processor**.
 
-Este documento é uma **curadoria** de [`docs/decisions.md`](docs/decisions.md), onde as 64 decisões estão registradas por extenso, cada uma com o contexto que a motivou e as alternativas descartadas. Aqui está o que sustenta o desenho e o que ele custa. Toda seção aponta para o `D-XXX` correspondente.
+Este documento é uma **curadoria** de [`docs/decisions.md`](docs/decisions.md), onde as 66 decisões estão registradas por extenso, cada uma com o contexto que a motivou e as alternativas descartadas. Aqui está o que sustenta o desenho e o que ele custa. Toda seção aponta para o `D-XXX` correspondente.
 
 Duas regras governaram o projeto inteiro, e valem como chave de leitura:
 
@@ -25,8 +25,9 @@ Duas regras governaram o projeto inteiro, e valem como chave de leitura:
                                          ▼
                     ┌──────────────────────────────────────────┐
                     │  application                             │
-                    │  casos de uso, portas (Clock, IdGen,     │
-                    │  Logger, UnitOfWork, ProviderIdentity)   │
+                    │  casos de uso, política de reversão,     │
+                    │  emissor de eventos, portas (Clock,      │
+                    │  IdGen, Logger, UnitOfWork, Identity)    │
                     └────────────────────┬─────────────────────┘
                                          ▼
                     ┌──────────────────────────────────────────┐
@@ -44,6 +45,8 @@ Duas regras governaram o projeto inteiro, e valem como chave de leitura:
 ```
 
 A dependência aponta **para dentro**. O domínio não conhece NestJS, MikroORM, o SDK da AWS nem `prom-client`; as interfaces de repositório vivem nele (D-027) e a infraestrutura as implementa.
+
+Dentro de `application`, o caso de uso de processamento tem **dois colaboradores** e a divisão entre eles é a de D-066: `decideReversal` (`reversal-policy.ts`) decide o desfecho de `REFUND`/`ROLLBACK` e **não muta nada** — devolve um veredito; `OutboxEventRecorder` traduz o desfecho nos eventos de RF-25. O que fica em `ProcessWagerTransaction` é a orquestração da transação SQL e a movimentação de saldo, que é o assunto dela.
 
 ### As fronteiras são impostas, não convencionadas
 
@@ -171,6 +174,13 @@ A aquisição do lock fica isolada num **único ponto** do repositório de walle
 
 > **D-002 e D-009 parecem contraditórias e não são.** Uma escolhe pessimistic; a outra recusa segurar transação durante I/O. Coexistem porque a transação financeira **não contém I/O externo**: a publicação vai para a outbox. Vale apresentá-las juntas.
 
+**A auditoria lê sob snapshot, não sob lock (D-065, emenda D-057).**
+`POST /wallets/:id/reconciliation` compara o saldo materializado com a soma do ledger, e em READ COMMITTED essas duas leituras veem instantes diferentes: uma aposta confirmada entre elas acusaria divergência que nunca existiu, num sinal que RF-16 manda logar e contabilizar. A primeira resposta foi o lock — reusar o `FOR UPDATE` de D-002 —, e ela funcionava ao custo de **bloquear as apostas daquela wallet pelo tempo da varredura**, sem teto.
+
+A resposta atual é uma transação `REPEATABLE READ` **e `read only`**, exposta pela porta `UnitOfWork` como um segundo método, `runSnapshot`. O `read only` é o que decidiu: RF-16 exige que divergência não seja corrigida em silêncio, e sob ele isso deixa de ser promessa do código e vira recusa do PostgreSQL (`25006`) — a mesma mudança de natureza que a trigger de imutabilidade do ledger fez por EL-07. O lock nunca comprou essa garantia; o snapshot compra, e ainda devolve o caminho do dinheiro.
+
+Consequência para RI-06: `findByIdForUpdate` volta a ter **só** os dois chamadores do use case de processamento. Uma revisão que procure `FOR UPDATE` disperso continua encontrando um lugar, e agora ele é exclusivamente o caminho que move saldo.
+
 ### 4.3 Idempotência
 
 **`payloadHash`: SHA-256 sobre uma lista fechada de 10 campos (D-005).**
@@ -221,6 +231,11 @@ O enunciado nomeia as filas de **entrada** e nenhuma de saída; `wagering-events
 
 **Erro permanente vai à DLQ por envio explícito (D-046, D-048).**
 Três destinos distintos conforme a natureza do erro: erro de negócio é resultado (não retenta), erro transitório volta à fila para o SQS reentregar, erro permanente vai à DLQ **na primeira entrega**, sem gastar as cinco tentativas. Numa fila FIFO isso importa: mensagem presa bloqueia o `MessageGroupId` inteiro e atrasa agregados sem relação nenhuma com o defeito. E erro de negócio que não deixaria rastro também vai à DLQ (D-048) — a classificação literal do requisito apagaria três erros de negócio sem ninguém saber que chegaram.
+
+**`FAILED` existe no modelo e não tem emissor — é reserva declarada, não esquecimento (D-047, D-064).**
+A §6.3 do enunciado define `FAILED` como terminal e auditável, e o status está no enum, no `CHECK` do schema e no grafo de transições de D-013. **Nada o escreve.** O motivo é que os dois caminhos que produziriam um `FAILED` não têm onde marcá-lo: a falha permanente do consumidor faz rollback e não deixa linha, e o esgotamento do TTL da referência é `REJECTED` por força da §7.1 — o enunciado escreve esse desfecho como critério de aceite.
+
+A alternativa foi avaliada e recusada por preço, não por gosto: gravar a falha numa segunda transação ocuparia a `idempotencyKey` da operação, e o reenvio legítimo — depois de o defeito ser corrigido — passaria a responder replay de uma falha em vez de processar. Isso troca um incidente recuperável por uma perda definitiva. O custo de manter a decisão é conhecido e está em §6: quem investiga uma mensagem morta olha a DLQ e o log, não `GET /wagering/transactions/:id`. Um emissor de verdade — um consumidor da DLQ com tabela própria de auditoria — é etapa com contrato próprio, e não cabia nesta entrega.
 
 **Reversão fora de ordem: espera quem ainda pode, rejeita quem não pode mais (D-050).**
 Um `ROLLBACK` que chega antes da `BET` de referência responde `202` e fica em `PENDING_REFERENCE`; um worker o reexamina até a referência chegar ou o TTL de 15 min esgotar, quando vira `REJECTED` com `REFERENCE_NOT_FOUND` e evento publicado. O TTL é expresso em **tempo**, não em contagem de tentativas: a pergunta de negócio é "quanto tempo esperamos a `BET` chegar", não "quantas vezes varremos".
@@ -358,7 +373,8 @@ Cortes e trade-offs assumidos conscientemente. Um corte documentado é engenhari
 
 - **Throughput por wallet é serial por construção.** É o preço direto de D-002: uma hot wallet é o gargalo, e o pessimistic o torna explícito em vez de escondê-lo em retries. O enunciado não define meta de RPS. Se houvesse, o caminho seria particionar a wallet em sub-saldos — o que muda o modelo, não a estratégia de lock.
 - **Não há teste de carga.** É diferencial opcional, e o núcleo tinha prioridade. Sem ele, não há número de throughput, p95 ou outbox lag sob carga para apresentar — só a garantia de correção sob contenção, que é o que os testes de concorrência provam.
-- **A reconciliação segura o lock da wallet durante a varredura inteira do ledger** (D-057). `POST /wallets/:id/reconciliation` entra pelo mesmo `findByIdForUpdate` e só commita depois de dobrar o ledger em páginas de 500 — então uma wallet com histórico longo bloqueia o próprio caminho do dinheiro enquanto o relatório é montado, e a espera aparece em `wallet_lock_wait_seconds` para operações que nada têm a ver com a auditoria. É o custo que D-057 aceitou para não acusar divergência falsa em READ COMMITTED, e ele **não tem teto**: limitar a varredura mudaria o contrato de RF-16, que pede o saldo reconstruído do ledger inteiro — um relatório parcial rotulado como reconciliação é pior que um lento. Quem operar isso em produção agenda a chamada, em vez de expô-la no caminho quente.
+- **A reconciliação mantém um snapshot aberto durante a varredura inteira do ledger** (D-065). Ela não bloqueia mais ninguém — esse era o custo de D-057, e saiu —, mas uma transação `REPEATABLE READ` longa segura o horizonte de vacuum das tabelas que ela lê enquanto dura. Numa wallet com histórico grande, isso é bloat adiado, não indisponibilidade. Limitar a varredura mudaria o contrato de RF-16, que pede o saldo reconstruído do ledger **inteiro** — um relatório parcial rotulado como reconciliação é pior que um lento. Quem operar isso em produção agenda a chamada, em vez de expô-la no caminho quente.
+- **`checkedEntries` é a contagem de um instante congelado**, não do momento em que a resposta sai (D-065). Lançamentos gravados durante a varredura não entram — e é exatamente isso que faz `storedBalance` e `calculatedBalance` serem comparáveis. Quem ler o número como "tamanho atual do ledger" vai errar por pouco, e por definição.
 
 ### Da mensageria
 
@@ -441,7 +457,7 @@ Os testes de concorrência sobem **processos de sistema operacional** de verdade
 | Documento | Conteúdo |
 |---|---|
 | [README.md](README.md) | setup do zero, comandos, superfície HTTP e de mensageria |
-| [docs/decisions.md](docs/decisions.md) | as 64 decisões por extenso, com alternativas descartadas |
+| [docs/decisions.md](docs/decisions.md) | as 66 decisões por extenso, com alternativas descartadas |
 | [docs/requirements.md](docs/requirements.md) | requisitos numerados e critérios de aceite |
 | [docs/desafio-original.md](docs/desafio-original.md) | enunciado íntegro — fonte da verdade final |
 | [docs/implementation-plan.md](docs/implementation-plan.md) | roteiro e o que cada etapa deixou para a seguinte |

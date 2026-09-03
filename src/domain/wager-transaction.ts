@@ -23,6 +23,19 @@ export enum WagerTransactionStatus {
   PendingReference = "PENDING_REFERENCE",
   Processed = "PROCESSED",
   Rejected = "REJECTED",
+  /**
+   * Erro permanente de infraestrutura — **reservado, sem emissor nesta entrega**
+   * (D-047, D-064).
+   *
+   * Existe porque a §6.3 do enunciado o define e porque D-013 o mantém no grafo
+   * de transições, no `CHECK` do schema e na análise de referência terminal de
+   * D-050. Mas nada o escreve, e isso é decisão registrada, não descuido: a
+   * falha permanente do consumidor faz rollback e não deixa linha onde marcar, e
+   * o esgotamento do TTL da referência é `REJECTED` por força da §7.1. Gravá-lo
+   * numa segunda transação ocuparia a `idempotencyKey` da operação e faria o
+   * reenvio legítimo responder replay de uma falha — perda definitiva no lugar de
+   * um incidente recuperável.
+   */
   Failed = "FAILED",
 }
 

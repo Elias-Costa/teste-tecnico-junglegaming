@@ -24,9 +24,11 @@ Registro leve de decisões, estilo ADR. Neste projeto ele tem **três** funçõe
 
 ## Fila de decisões em aberto
 
-**Fila vazia.** O último item — `D-064`, exposto pela 1ª revisão adversarial de E-17 — foi **fechado em 2026-09-03**, sem tocar código de produção: o esgotamento do TTL segue `REJECTED`, porque é o que a §7.1 do enunciado escreve.
+**Fila vazia.** Os últimos itens — `D-065` e `D-066`, expostos pela **avaliação do repositório contra o enunciado** (2026-09-03) — foram fechados no mesmo dia, antes de qualquer linha de `src/` mudar. `D-065` **reabre e emenda `D-057`**: a reconciliação sai de baixo do lock da wallet e passa a ler sob snapshot `read only`. `D-066` autoriza o fatiamento de `ProcessWagerTransaction` em duas costuras, sem mudança de comportamento. O terceiro achado da mesma avaliação — `FAILED` sem emissor — foi levado ao mantenedor como reabertura de `D-064` e **não virou decisão nova**: D-064 segue valendo, e o que faltava era a reserva do status aparecer no código, não só nos documentos.
 
-**A 2ª revisão adversarial (2026-09-03) não expôs decisão nenhuma**, e vale registrar por quê — é o contrário de E-09, que não expôs decisão por não ter escrito código. Aqui houve código: três correções (validação de forma de `walletId` nas duas bordas, a cadência do `PendingReferenceWorker` quando o ciclo não avança, e o `close()` do cliente do consumidor no shutdown). Nenhuma delas é decisão: as três são o código **deixando de cumprir** o que D-014/D-056/D-006, RNF-05 e RF-22 já mandavam, e a correção é executar a decisão existente, não escolher outra. O quarto achado — a reconciliação segurando o lock da wallet durante a varredura inteira do ledger — **é** uma decisão registrada sendo cumprida: `D-057` aceitou esse custo por escrito, e mexer nele seria reabri-la. Foi levado ao mantenedor como reabertura (`AGENTS.md` §0), que decidiu **manter D-057** e apenas registrar a limitação em `ARCHITECTURE.md` §6. `D-057` **não foi reescrita**: aqui emenda vira entrada nova (D-042 sobre D-008, D-036 sobre D-006), e não há emenda a fazer numa decisão que segue valendo como está. O item anterior — `D-060`, o nome da métrica de divergência de reconciliação, aberto por E-14 — foi fechado no mesmo dia, antes de E-15 escrever a primeira linha de observabilidade: a métrica é `wallet_reconciliation_checks_total{consistent}` e entrou na tabela de D-010, que segue sendo o contrato de nomenclatura.
+O item anterior — `D-064`, exposto pela 1ª revisão adversarial de E-17 — foi **fechado em 2026-09-03**, sem tocar código de produção: o esgotamento do TTL segue `REJECTED`, porque é o que a §7.1 do enunciado escreve.
+
+**A 2ª revisão adversarial (2026-09-03) não expôs decisão nenhuma**, e vale registrar por quê — é o contrário de E-09, que não expôs decisão por não ter escrito código. Aqui houve código: três correções (validação de forma de `walletId` nas duas bordas, a cadência do `PendingReferenceWorker` quando o ciclo não avança, e o `close()` do cliente do consumidor no shutdown). Nenhuma delas é decisão: as três são o código **deixando de cumprir** o que D-014/D-056/D-006, RNF-05 e RF-22 já mandavam, e a correção é executar a decisão existente, não escolher outra. O quarto achado — a reconciliação segurando o lock da wallet durante a varredura inteira do ledger — **é** uma decisão registrada sendo cumprida: `D-057` aceitou esse custo por escrito, e mexer nele seria reabri-la. Foi levado ao mantenedor como reabertura (`AGENTS.md` §0), que decidiu **manter D-057** e apenas registrar a limitação em `ARCHITECTURE.md` §6. `D-057` **não foi reescrita**: aqui emenda vira entrada nova (D-042 sobre D-008, D-036 sobre D-006), e não há emenda a fazer numa decisão que segue valendo como está. — **Superado por `D-065`** (2026-09-03): a mesma questão voltou pela avaliação, desta vez com um argumento que não estava na mesa na primeira rodada — a transação de snapshot pode ser aberta `read only` —, e o mantenedor decidiu trocar o mecanismo. A reabertura só se pagou porque trouxe fato novo, não porque insistiu. O item anterior — `D-060`, o nome da métrica de divergência de reconciliação, aberto por E-14 — foi fechado no mesmo dia, antes de E-15 escrever a primeira linha de observabilidade: a métrica é `wallet_reconciliation_checks_total{consistent}` e entrou na tabela de D-010, que segue sendo o contrato de nomenclatura.
 
 E-15 expôs mais três decisões ao ser detalhada, todas fechadas na mesma conversa e antes do código: **D-061** (como o log estruturado de RNF-06 é implementado), **D-062** (onde a instrumentação de métricas é ligada, dado que a aplicação e o domínio não podem conhecer `prom-client`) e **D-063** (a etapa passa a subir o processo: `main.ts`, os três workers montados e comando de migration).
 
@@ -1531,3 +1533,63 @@ O custo da alternativa fechou o argumento. Marcar `FAILED` no TTL exigiria, em c
 - O ramo `Failed` de `httpStatusForResult` **permanece** — não por ser alcançável, mas porque o `switch` é exaustivo sobre `WagerTransactionStatus`, e `FAILED` continua no grafo de D-013, no `CHECK` do schema e na análise de D-050 (referência terminal → `REFERENCE_MISMATCH`).
 - **Limitação registrada em dois lugares**, não um: `ARCHITECTURE.md` §6, como as consequências de D-047 já mandavam, e a seção de Mensageria do `README.md`, que é onde quem integra lê o contrato das três filas. Uma mensagem que vai à DLQ não deixa rastro consultável por RF-12.
 - Um emissor real de `FAILED` — um consumidor da DLQ, por exemplo — é trabalho de outra etapa, com contrato próprio. Não cabe em congelamento.
+
+---
+
+## D-065 — Reconciliação lê sob snapshot read-only, não sob o lock (2026-09-03)
+
+**Status:** DECIDIDA
+**Contexto:** reabertura de **D-057**, exposta pela avaliação do repositório contra o enunciado. D-057 decidiu que `POST /wallets/:id/reconciliation` entra pelo `findByIdForUpdate` de D-002 e lê o ledger inteiro dentro dessa transação. A consequência foi aceita por escrito e registrada como limitação em `ARCHITECTURE.md` §6: o endpoint **bloqueia o caminho do dinheiro daquela wallet** por tempo proporcional ao tamanho do ledger, sem teto. A 2ª revisão adversarial já havia trazido isso ao mantenedor, que decidiu manter D-057 e apenas documentar.
+
+O que muda agora não é o custo — ele sempre esteve visível —, é o **argumento**. D-057 listou `REPEATABLE READ` entre as opções e a descartou por simplicidade: "mais um comportamento para explicar, testar e lembrar". Ninguém, naquele momento, notou que a transação de snapshot pode ser aberta em **`read only`**. Com isso ela deixa de ser apenas uma forma diferente de conseguir o mesmo snapshot: ela compra uma garantia que o lock **nunca** deu.
+
+**Opções:**
+- **Manter D-057** — o lock fica, e a limitação segue documentada.
+- **`REPEATABLE READ` + `read only`** — snapshot consistente sem bloquear ninguém, e o banco recusando qualquer escrita vinda deste caminho.
+- **`REPEATABLE READ` + `SUM` no banco** — o mesmo snapshot, trocando o laço de páginas por uma agregação em SQL.
+
+**Decisão:** a reconciliação passa a rodar em **`runSnapshot`** — segundo método da porta `UnitOfWork`, implementado como `em.transactional(cb, { isolationLevel: REPEATABLE_READ, readOnly: true })` — e lê a wallet por `findById`, **sem lock**. O laço de páginas de D-057 e toda a aritmética por `Money` ficam como estão: a terceira opção não entra.
+
+**Justificativa:** RF-16 diz que divergência **não é corrigida silenciosamente**. Sob D-057 isso era uma promessa do código — nada impedia uma linha futura de "consertar" o saldo dentro daquela transação, que era de escrita. Sob `read only`, o PostgreSQL recusa a escrita com `25006`, e a promessa vira propriedade do sistema. É o mesmo tipo de argumento que D-023 usou para preferir trigger a `REVOKE` e que D-026 usou para tirar o ORM de cima do domínio: a garantia mora onde ninguém consegue contorná-la por descuido.
+
+Isso responde a objeção original de D-057. O segundo nível de isolamento continua sendo um comportamento a mais para explicar — mas ele agora **paga** por si: elimina o único caminho do sistema em que uma leitura de auditoria bloqueia dinheiro, e fecha RF-16 por construção. A frase de uma linha deixa de ser "a reconciliação espera a movimentação em voo terminar" e passa a ser **"a reconciliação lê um instante congelado e não pode escrever"** — que é mais curta e diz mais.
+
+O `SUM` foi descartado por motivo independente: tiraria a soma de dinheiro do `Money` e a colocaria no SQL. O ganho seria de viagens ao banco, e o endpoint não está no caminho quente.
+
+**Consequências:**
+- **`UnitOfWork` ganha um segundo método**, e só ele muda de forma: `runSnapshot` entrega `ReadOnlyRepositories` — `Pick<TransactionalRepositories, "wallets" | "ledger">`. Quem lê sob snapshot **não recebe** inbox nem outbox: a assinatura diz o que aquele caminho pode tocar, antes de o banco precisar dizer.
+- **A limitação de `ARCHITECTURE.md` §6 sai e outra, menor, entra.** Uma varredura longa mantém um snapshot aberto — o `xmin` da transação segura o vacuum daquelas tabelas enquanto ela durar —, e `checkedEntries` passa a ser a contagem de um instante, não do fim da leitura. Nenhuma das duas bloqueia escrita.
+- **RI-06 continua com um ponto único de aquisição de lock.** `findByIdForUpdate` volta a ter só os dois chamadores de `ProcessWagerTransaction`. Uma revisão que procure `FOR UPDATE` disperso continua encontrando um lugar só — e agora ele é exclusivamente o caminho do dinheiro.
+- **D-057 não é reescrita.** Emenda vira entrada nova, como D-042 sobre D-008, D-036 sobre D-006 e D-064 sobre D-047. O que cai de D-057 é o mecanismo; o que fica é o problema que ela identificou — comparar saldo com ledger em READ COMMITTED lê dois instantes — e a direção de `difference`, que segue sendo contrato.
+- **`docs/requirements.md` RF-16 foi corrigido:** a linha "a leitura acontece sob o lock da wallet `[DECIDIDO: D-057]`" descrevia o código antigo e passou a creditar `[DECIDIDO: D-057, D-065]`.
+- Dois testes novos em `tests/integration/http-read-api.test.ts`: a reconciliação respondendo **enquanto outra transação segura o `FOR UPDATE`** da mesma wallet (prova comportamental da mudança — este caso trava sob D-057), e a escrita recusada dentro de `runSnapshot` (prova da garantia nova).
+- As outras três consultas de E-14 **não migram**. Elas fazem uma leitura só, e uma leitura só não tem dois instantes para conciliar. Migrá-las seria pagar um segundo nível de isolamento sem comprar nada.
+
+---
+
+## D-066 — A decisão de reversão e a emissão de eventos saem do use case (2026-09-03)
+
+**Status:** DECIDIDA
+**Contexto:** achado da avaliação do repositório. `ProcessWagerTransaction` tem 853 linhas e faz três trabalhos: orquestra a transação SQL (lock, idempotência, persistência, inbox), decide o desfecho de `REFUND`/`ROLLBACK` (RN-04..RN-10, na ordem de D-051) e emite os eventos de integração (RF-25). É o arquivo mais importante do repositório e o mais caro de ler.
+
+A tensão é real e vale registrar: `AGENTS.md` §3 proíbe "aproveitar para" refatorar, e um fatiamento feito para o arquivo parecer arrumado espalharia um raciocínio único por três arquivos — o oposto do que §5.1 pede.
+
+**Opções:**
+- **Manter como está** — o arquivo é coeso e está coberto por 212 testes de integração e concorrência.
+- **Extrair só o emissor de eventos** — corte pequeno e seguro, que não toca regra de negócio nenhuma.
+- **Extrair a política de reversão e o emissor** — dois cortes, com a política mudando de forma no caminho.
+
+**Decisão:** os **dois** cortes, com uma condição de forma: `ReversalPolicy` passa a devolver um **veredito puro** — esperar, rejeitar com código, ou aplicar em determinada direção — em vez de mutar o agregado. Quem aplica o veredito continua sendo o use case.
+
+**Justificativa:** o fatiamento só se paga se melhorar a **forma**, não o tamanho. Hoje `decideReversal` decide *e* aplica: chama `rejectWith`, que muta a transação e grava o saldo observado, e `applyMovement`, que muta a wallet e cria o lançamento. Uma função chamada "decide" que move dinheiro é justamente o tipo de coisa que a leitura de um revisor não pega.
+
+Separada, a política vira o que ela sempre foi no enunciado: uma tabela de regras (§7, itens 1 a 5 e 9) traduzida em código, com duas leituras de repositório e nenhum efeito. Fica testável em isolamento, e a ordem de D-051 — que é uma decisão registrada, não uma sequência acidental de `if` — passa a morar num arquivo cujo nome diz que ela está ali.
+
+O emissor sai pelo mesmo motivo, mais fraco mas suficiente: `enqueueEvents` lê a tabela inteira de RF-25 e é o ponto onde RI-04/EL-06 se sustentam. Ele não tem relação com transação SQL nem com lock, e a única coisa que perde ao sair é a vizinhança.
+
+**Consequências:**
+- **Nenhuma mudança de comportamento, e isso é critério de aceite, não expectativa.** Se um teste de integração ou concorrência precisar mudar de asserção, o fatiamento mudou comportamento e é revertido.
+- **D-054 é preservada e reforçada.** Continua havendo **uma** implementação da decisão de reversão para os dois chamadores — a submissão e o worker de RF-26 —, agora com nome próprio.
+- Três arquivos novos em `src/application/`: `reversal-policy.ts`, `outbox-event-recorder.ts` e `transaction-outcome.ts`, este último só para o tipo que os três compartilham.
+- **`OpenWallet` fica intocado**, com a sua própria cópia de `enqueue`. Unificar as duas é refatoração fora do achado; a duplicação — duas linhas — continua onde está, agora registrada aqui.
+- O que sobra em `ProcessWagerTransaction` é orquestração, na ordem em que ela acontece. As guardas de último recurso do agregado (D-019) e a ordem dos `insert` (D-028) não se movem.

@@ -154,7 +154,7 @@ curl -s -X POST localhost:3000/wallets/<walletId>/reconciliation
 {"walletId":"01a0659b-54d1-74df-a19d-3a9adbe56bdb","storedBalance":{"amount":"70.00","currency":"BRL"},"calculatedBalance":{"amount":"70.00","currency":"BRL"},"difference":{"amount":"0.00","currency":"BRL"},"consistent":true,"checkedEntries":2}
 ```
 
-A reconciliação **acusa** divergência e não a corrige. Corrigir em silêncio destrói a evidência de que houve um defeito.
+A reconciliação **acusa** divergência e não a corrige. Corrigir em silêncio destrói a evidência de que houve um defeito — e aqui isso não depende de disciplina: ela roda numa transação `read only`, então o banco recusa qualquer escrita vinda deste caminho. Ela também **não bloqueia** as apostas da wallet: lê um instante congelado (`REPEATABLE READ`), não sob lock.
 
 ### A mesma operação, pela fila
 
@@ -363,5 +363,5 @@ Ele precisa de Docker rodando para os Testcontainers. Confirme com `docker ps`.
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | decisões, trade-offs, limitações conhecidas e o desenho de auth não implementada |
 | [docs/desafio-original.md](docs/desafio-original.md) | enunciado íntegro — fonte da verdade final |
 | [docs/requirements.md](docs/requirements.md) | requisitos numerados, restrições invioláveis, falhas eliminatórias e testes obrigatórios |
-| [docs/decisions.md](docs/decisions.md) | as 64 decisões registradas, com contexto e alternativas descartadas |
+| [docs/decisions.md](docs/decisions.md) | as 66 decisões registradas, com contexto e alternativas descartadas |
 | [docs/implementation-plan.md](docs/implementation-plan.md) | roteiro de implementação e o que cada etapa deixou para a seguinte |

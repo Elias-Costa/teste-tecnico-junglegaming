@@ -47,6 +47,11 @@ export enum BusinessFailureCode {
  * permanente ou esgotamento para DLQ, e que erro transitório não toca o status.
  * Com dois enums, `reject(MAX_RETRIES_EXHAUSTED)` e `fail(INSUFFICIENT_FUNDS)`
  * viram erro de compilação em vez de convenção que alguém precisa lembrar.
+ *
+ * **Os dois códigos estão reservados e nenhum é atribuído nesta entrega**
+ * (D-047, D-064) — pelo mesmo motivo que `WagerTransactionStatus.Failed` não tem
+ * emissor, documentado lá. O enum continua existindo porque é ele que faz o
+ * compilador impor a separação de D-013: sem ele, a regra viraria comentário.
  */
 export enum InfrastructureFailureCode {
   /** Erro permanente de infraestrutura identificado no processamento. */
