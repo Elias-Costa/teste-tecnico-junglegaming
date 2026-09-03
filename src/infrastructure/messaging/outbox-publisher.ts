@@ -1,5 +1,6 @@
 import type { Clock } from "../../application/ports/clock.ts";
 import type { RetryPolicy } from "../../domain/retry-policy.ts";
+import { recordRetry } from "../observability/metrics.ts";
 import type { EventPublisher } from "./event-publisher.ts";
 import type { OutboxClaimStore } from "./outbox-claim-store.ts";
 
@@ -111,6 +112,10 @@ export class OutboxPublisher {
         // a próxima tentativa.
         message.scheduleRetry(this.clock.now(), this.policy);
         await this.store.releaseForRetry(message);
+        // `wager_retries_total{loop="outbox"}` (D-010, D-062). Contado no ponto
+        // do reagendamento, e não no `catch` inteiro: o que a métrica conta é
+        // tentativa **remarcada**, que é o que vai custar mais uma publicação.
+        recordRetry("outbox");
         failed += 1;
       }
     }

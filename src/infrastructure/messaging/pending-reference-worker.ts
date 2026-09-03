@@ -2,6 +2,7 @@ import type { Clock } from "../../application/ports/clock.ts";
 import type { ProcessWagerTransaction } from "../../application/process-wager-transaction.ts";
 import { backoffDelayMs, type RetryPolicy } from "../../domain/retry-policy.ts";
 import { WagerTransactionStatus } from "../../domain/wager-transaction.ts";
+import { recordRetry } from "../observability/metrics.ts";
 import type { PendingReferenceStore } from "./pending-reference-store.ts";
 
 /** Parâmetros operacionais do worker, preenchidos a partir de `readRetryEnv()`. */
@@ -117,6 +118,11 @@ export class PendingReferenceWorker {
 
         if (status === WagerTransactionStatus.PendingReference) {
           await this.reschedule(pending.id, pending.referenceAttempts);
+          // `wager_retries_total{loop="pending_reference"}` (D-010, D-062): a
+          // referência ainda não chegou e a pendente foi remarcada pela curva de
+          // D-022. Subir sem parar aqui é o sinal de que um produtor está
+          // mandando reversão para uma `BET` que nunca vem.
+          recordRetry("pending_reference");
           rescheduled += 1;
         } else if (status === WagerTransactionStatus.Processed) {
           resolved += 1;

@@ -26,3 +26,6 @@ export const UNIT_OF_WORK = Symbol("UnitOfWork");
 
 /** Token de `ProviderIdentityPort` (`src/application/ports/provider-identity.ts`, D-012). */
 export const PROVIDER_IDENTITY = Symbol("ProviderIdentityPort");
+
+/** Token de `Logger` (`src/application/ports/logger.ts`, RNF-06, D-061). */
+export const LOGGER = Symbol("Logger");

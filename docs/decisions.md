@@ -24,13 +24,15 @@ Registro leve de decisões, estilo ADR. Neste projeto ele tem **três** funçõe
 
 ## Fila de decisões em aberto
 
-**Um item, aberto por E-14 e endereçado a E-15: `D-060` — o nome da métrica de divergência de reconciliação.** RF-16 exige que a divergência seja "contabilizada em métrica", e a tabela de **D-010** fecha a nomenclatura em sete métricas, **nenhuma das quais a cobre**. E-14 não instala `prom-client` (isso é escopo de E-15), então a etapa entrega a divergência sinalizada na resposta e um gancho `onDivergence` injetado — mesma forma do `onCycleError` de E-10, e pelo mesmo motivo: não deixar a falha sumir em silêncio enquanto o log estruturado de RNF-06 não existe. **E-15 não pode começar sem que o nome entre na tabela de D-010.**
+**Fila vazia.** O único item — `D-060`, o nome da métrica de divergência de reconciliação, aberto por E-14 — foi **fechado em 2026-09-03**, antes de E-15 escrever a primeira linha de observabilidade: a métrica é `wallet_reconciliation_checks_total{consistent}` e entrou na tabela de D-010, que segue sendo o contrato de nomenclatura.
+
+E-15 expôs mais três decisões ao ser detalhada, todas fechadas na mesma conversa e antes do código: **D-061** (como o log estruturado de RNF-06 é implementado), **D-062** (onde a instrumentação de métricas é ligada, dado que a aplicação e o domínio não podem conhecer `prom-client`) e **D-063** (a etapa passa a subir o processo: `main.ts`, os três workers montados e comando de migration).
 
 O item anterior — o dono de `reference_attempts` e `next_reference_attempt_at`, aberto por **D-029** — foi fechado por **D-052** em 2026-09-02, antes de o worker de E-13 ser escrito. As duas colunas são estado operacional, manipulado por `UPDATE` direto no `PendingReferenceStore`.
 
 A fila continuar vazia não significa que ela deixou de valer: toda etapa seguinte que expuser uma decisão não prevista **para** e a registra aqui antes de virar código (`AGENTS.md` §0).
 
-As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito, **D-033** a **D-039**, expostas por E-08 e resolvidas antes de a borda HTTP ser escrita, **D-040** a **D-043**, expostas por E-10 e resolvidas antes de o worker ser escrito, **D-044** a **D-048**, expostas por E-11 e resolvidas antes de o consumidor ser escrito, **D-049** a **D-051**, expostas por E-12 e resolvidas antes de os quatro kinds restantes serem escritos, **D-052** a **D-055**, expostas por E-13 e resolvidas antes de o worker de referências ser escrito, e **D-056** a **D-059**, expostas por E-14 e resolvidas antes de as consultas serem escritas. **E-15 está bloqueada por D-060**; nenhuma outra etapa está.
+As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito, **D-033** a **D-039**, expostas por E-08 e resolvidas antes de a borda HTTP ser escrita, **D-040** a **D-043**, expostas por E-10 e resolvidas antes de o worker ser escrito, **D-044** a **D-048**, expostas por E-11 e resolvidas antes de o consumidor ser escrito, **D-049** a **D-051**, expostas por E-12 e resolvidas antes de os quatro kinds restantes serem escritos, **D-052** a **D-055**, expostas por E-13 e resolvidas antes de o worker de referências ser escrito, **D-056** a **D-059**, expostas por E-14 e resolvidas antes de as consultas serem escritas, e **D-060** a **D-063**, fechadas antes de a observabilidade de E-15 ser escrita. **Nenhuma etapa está bloqueada.**
 
 **E-09 foi a primeira etapa a não expor decisão nenhuma**, e vale registrar por quê: ela não escreveu código de produção. A prova de concorrência é só teste, e a estratégia que ela verifica — pessimistic `FOR UPDATE` por wallet — já estava decidida em **D-002** desde 2026-09-01. A forma de RT-17 (três processos de sistema operacional subindo o `AppModule` inteiro, em vez de três chamadas ao use case no mesmo processo) também não foi escolha: **RI-08** cobra literalmente "correta com múltiplas **instâncias da aplicação**", e EL-05 é "correta somente com uma instância". Uma etapa sem decisão nova é sinal de que as anteriores foram bem fechadas, não de que alguém deixou de perguntar.
 
@@ -39,6 +41,8 @@ A fila continua valendo daqui em diante: se a implementação expuser uma decis�
 E-13 fechou o ciclo com quatro de uma vez, e vale notar de onde vieram: **D-052** era o item que a própria fila já carregava; **D-053** era uma pendência que D-030 tinha nomeado e adiado; **D-054** apareceu porque o reuso de `decideReversal` esbarrou no grafo de D-013 — a pendente relida não pode ser re-marcada, e isso só se descobre ao escrever a segunda entrada; e **D-055** porque **RNF-06 exigia um `correlationId` que nenhuma coluna guardava**, exatamente como RN-12 exigira em E-07 um saldo que nenhuma coluna guardava (D-030). Fila vazia não significa que não vão surgir mais.
 
 E-14 confirmou isso com quatro decisões e uma pendência, e a origem delas vale registrar: **D-056** porque o mapa de D-006 fechava cinco situações e **nenhuma delas responde a um `GET`**; **D-057** porque comparar saldo com ledger em READ COMMITTED lê **dois instantes diferentes**, e a divergência falsa cairia num sinal que RF-16 manda logar; **D-058** porque a guarda de lint de EL-01 torna a conversão mais banal do projeto — texto para inteiro — uma pergunta de arquitetura; **D-059** porque o enunciado exibe o corpo de três endpoints e **não o das quatro consultas**. E **D-060** ficou aberta porque RF-16 exige uma métrica que a tabela fechada de D-010 não nomeia — o mesmo tipo de lacuna de D-030 e D-055, desta vez entre dois documentos já registrados.
+
+E-15 fechou D-060 e expôs mais três, e a origem das três é a mesma: **RNF-06 e RNF-07 dizem o que observar e não dizem por onde**. **D-061** porque "log JSON com cinco campos e sem payload financeiro" é requisito de conteúdo, não de biblioteca, e a escolha entre fechar os campos num tipo ou confiar em redaction de biblioteca decide se a proibição é verificada pelo compilador ou pela memória de quem escreve. **D-062** porque a regra de lint que bane `prom-client` no domínio resolve metade da pergunta e deixa a outra em aberto — quem incrementa, já que a aplicação também não deveria conhecer métrica, e `wallet_lock_wait_seconds` só é mensurável de dentro do repositório. **D-063** porque a etapa esbarrou no buraco que o "Estado atual" vinha anunciando desde E-08: três das oito métricas moram em workers que não estão montados em processo nenhum, e uma métrica que nenhum `/metrics` alcança não cumpre RNF-07.
 
 ---
 
@@ -64,6 +68,7 @@ E-14 confirmou isso com quatro decisões e uma pendência, e a origem delas vale
 | `wallet_lock_wait_seconds` | histogram | conflitos de lock — **espera por lock**, por D-002 |
 | `outbox_lag_seconds` | gauge | `now() - occurred_at` da mensagem pendente mais antiga |
 | `wager_processing_seconds{source}` | histogram | latência, com `source` = `http` \| `sqs` |
+| `wallet_reconciliation_checks_total{consistent}` | counter | divergência de reconciliação (RF-16) — **acrescentada por D-060**, 2026-09-03 |
 
 **Consequências:**
 - `outbox_lag_seconds` precisa de um **collect callback** que consulta o banco a cada scrape. É a única métrica que não é incrementada no caminho quente, e é a que mais diz sobre a saúde do sistema.
@@ -71,6 +76,8 @@ E-14 confirmou isso com quatro decisões e uma pendência, e a origem delas vale
 - **Os contadores são por processo, e isso está correto.** Com três ou mais instâncias (RI-08), quem agrega é o scraper. Ninguém deve "consertar" isso guardando contador no banco: seria estado compartilhado inventado, com custo de escrita no caminho quente e sem ganho.
 - `/metrics` fica aberto, como os endpoints de health (RF-17). Coerente com D-012, que não implementa autenticação.
 - `ARCHITECTURE.md` registra a tabela acima; a lista de nomes é contrato de observabilidade.
+- **A tabela ganhou uma oitava linha em 2026-09-03** (D-060). Contrato de nomenclatura não é lista imutável: é lista que só cresce **por decisão registrada**, e não por um nome improvisado no meio de uma implementação — que é exatamente o que teria acontecido se E-14 tivesse batizado a métrica de RF-16 sozinha.
+- **Onde cada instrumento é incrementado é decisão separada, fechada em D-062.** Esta tabela nomeia; D-062 diz quem chama.
 
 ---
 
@@ -1404,7 +1411,7 @@ O custo é uma migration e uma coluna que hoje só o worker relê. É baixo, e a
 
 ## D-060 — Nome da métrica de divergência de reconciliação (2026-09-02)
 
-**Status:** EM ABERTO — endereçada a E-15, exposta por E-14.
+**Status:** DECIDIDA em 2026-09-03 — exposta por E-14, fechada antes de E-15 escrever código.
 **Contexto:** RF-16 exige que uma divergência entre `storedBalance` e `calculatedBalance` seja **logada, contabilizada em métrica e sinalizada na resposta**. A tabela de D-010 fecha a nomenclatura de observabilidade em sete métricas — `wager_transactions_total`, `wager_duplicates_total`, `wager_retries_total`, `wager_dlq_messages_total`, `wallet_lock_wait_seconds`, `outbox_lag_seconds`, `wager_processing_seconds` — e **nenhuma delas cobre reconciliação**. A lacuna só aparece ao implementar RF-16, porque até E-13 não havia quem divergisse.
 
 **Opções:**
@@ -1414,4 +1421,81 @@ O custo é uma migration e uma coluna que hoje só o worker relê. É baixo, e a
 
 **Por que não foi decidida em E-14:** a etapa **não instala `prom-client`** — D-010 põe o registro de métricas em E-15, e antecipá-lo faria E-14 montar metade da infraestrutura de observabilidade fora da etapa dela. O que E-14 entrega é a divergência **sinalizada na resposta** (`consistent: false`, `difference`) e um gancho `onDivergence` injetado no use case, com a mesma forma e o mesmo propósito do `onCycleError` de E-10: enquanto o log estruturado de RNF-06 não existe, a falha não pode sumir calada.
 
-**Bloqueia:** E-15. O nome precisa entrar na tabela de D-010 antes de virar código, porque aquela tabela é declarada contrato de observabilidade.
+**Decisão:** **`wallet_reconciliation_checks_total{consistent}`** — counter com label, contando **toda** reconciliação executada e separando por desfecho. Entrou na tabela de D-010 como oitava linha.
+
+**Justificativa:** contar só a divergência dá o numerador sem o denominador, e três divergências em dez verificações é um incidente enquanto três em dez mil é ruído — a mesma métrica não distingue os dois casos se o denominador não for coletado. Com o label, `rate(...{consistent="false"}) / rate(...)` é a taxa de inconsistência, e o alerta se escreve sobre ela em vez de sobre um contador absoluto que cresce com o tráfego. A terceira opção — um gauge do maior desvio observado — foi descartada por duas razões: gauge é por processo (a consequência que D-010 já registra) e o máximo de vários processos não agrega no scraper como um counter agrega; e o desvio é **dinheiro**, que sairia de `Money` para virar float de métrica logo no requisito que existe para provar que o saldo fecha (EL-01).
+
+**Consequências:**
+- O counter é incrementado na **borda**, em `WalletsController.reconcile`, e não no gancho `onDivergence` — o gancho só é avisado quando há divergência, e por isso não consegue contar as verificações consistentes. É D-062 na prática.
+- `onDivergence` fica com o papel de **log** (RNF-06): a divergência é o evento que precisa chegar a um humano com `walletId` e correlação, e o counter sozinho não diz de qual wallet se trata.
+- `ReconcileWallet` **não muda**: continua sem conhecer métrica, e o que E-14 deixou pronto foi suficiente.
+- `difference` continua fora da métrica e fora do log estruturado — é valor monetário, e RNF-06 proíbe payload financeiro no log.
+
+---
+
+## D-061 — Log estruturado: logger JSON próprio, injetado por porta (2026-09-03)
+
+**Status:** DECIDIDA
+**Contexto:** RNF-06 exige log JSON com `correlationId`, `messageId`, `transactionId`, `walletId`, `providerId` e **sem dados sensíveis ou payloads financeiros completos**. Nenhuma decisão anterior escolheu como isso é implementado, e há quatro ganchos esperando por um logger desde E-10: os três `onCycleError` dos loops e o `onDivergence` de E-14.
+
+**Opções:**
+- **Logger JSON próprio**, atrás de uma porta de aplicação, escrevendo uma linha JSON por evento.
+- **`LoggerService` do NestJS** em formato JSON — aproveitaria o log de boot do próprio framework.
+- **`pino`** — biblioteca madura, com redaction pronta.
+
+**Decisão:** **logger JSON próprio** (`src/infrastructure/observability/json-logger.ts`), atrás da porta `Logger` (`src/application/ports/logger.ts`), com o **conjunto de campos fechado em tipo**.
+
+**Justificativa:** o que RNF-06 cobra não é volume de recurso de logging — é uma linha JSON com cinco campos nomeados e a **ausência** de valor monetário. Fechar esses campos num tipo faz a proibição ser verificada pelo compilador em vez de por revisão: não existe assinatura que aceite um `Money`, então "payload financeiro no log" deixa de ser algo que alguém precisa lembrar de não fazer. `pino` traria redaction por configuração — proteção por lista de exclusão, que falha em silêncio quando um campo novo aparece — e uma dependência que nenhuma decisão previu, para um volume que cabe em algumas dezenas de linhas. O `LoggerService` do Nest cobriria o boot do framework, mas os três workers **não são geridos pelo Nest**: eles receberiam a instância por parâmetro de qualquer forma, então a integração pagaria acoplamento sem cobrir o caso principal. Mesmo espírito de D-038, que já escreveu o parser à mão pelo mesmo motivo.
+
+**Consequências:**
+- A porta vive em `src/application/ports/`, ao lado de `Clock` e `IdGenerator`: quem loga é a borda e a infraestrutura, mas a porta ali permite que um use case receba o logger sem importar infraestrutura, se algum dia precisar.
+- **O tipo do contexto é fechado** (`LogContext`): os cinco campos de RNF-06 mais `kind`, `status` e `failureCode` — todos categóricos. Não há campo livre, e não há como passar `amount`.
+- Uma linha por evento, em `stdout`, com `level`, `event`, `timestamp` e o contexto achatado. Sem multi-linha: log de container é lido por agregador, e um objeto quebrado em várias linhas vira vários registros.
+- Os quatro ganchos deixam de ser opcionais na composição de produção: `main.ts` liga o logger nos três `onCycleError` e no `onDivergence`. Os defaults continuam opcionais para não obrigar os testes a montar logger.
+- Erro logado sai como `message` e `name` do `Error`, **nunca** o objeto inteiro: um erro do driver do PostgreSQL carrega os parâmetros da query, e parâmetro de query neste sistema é dinheiro.
+
+---
+
+## D-062 — Instrumentação nas bordas e no repositório, sobre registry singleton (2026-09-03)
+
+**Status:** DECIDIDA
+**Contexto:** D-010 nomeia as métricas; falta dizer **quem as incrementa**. O domínio não pode conhecer `prom-client` (a regra de lint já o bane em `src/domain/`), e a camada de aplicação orquestra a transação — instrumentá-la de dentro significaria passar mais um colaborador a `ProcessWagerTransaction`. Some-se que `wallet_lock_wait_seconds` mede a **espera pelo `FOR UPDATE`**, que só existe dentro do repositório.
+
+**Opções:**
+- **Bordas + repositório, sobre um registry singleton de módulo** — controllers, handler de mensagem e os três loops incrementam; o repositório cronometra o lock.
+- **Portas de observação injetadas nos use cases**, estendendo o padrão de `onDivergence`.
+- **Registry injetado por DI**, em vez de estado de módulo.
+
+**Decisão:** os contadores são incrementados **nas bordas** (`WalletsController`, `WageringTransactionsController`, `WagerMessageHandler`, `OutboxPublisher`, `SqsWagerConsumer`, `PendingReferenceWorker`) e o histograma de lock **dentro de `MikroWalletRepository.findByIdForUpdate`**, todos contra um **registry singleton** exportado por `src/infrastructure/observability/metrics.ts`.
+
+**Justificativa:** as bordas já conhecem tudo que os labels pedem — `kind` e `status` estão no comando e no resultado, `source` é a própria borda, `loop` é o próprio worker — então instrumentar ali não custa nenhum parâmetro novo em nenhum use case, e a camada de aplicação continua sem saber que métrica existe. A alternativa por portas injetadas acrescentaria colaborador a `ProcessWagerTransaction`, que é a classe que menos deveria crescer no projeto, **e ainda deixaria `wallet_lock_wait_seconds` de fora**, porque a espera pelo lock não é visível de lá. O registry é singleton porque o do `prom-client` é global por natureza e porque **os três workers vivem fora do container do Nest**: injetá-lo alcançaria só metade do código, e a outra metade precisaria de um segundo caminho — duas fontes para o mesmo `/metrics`.
+
+**Consequências:**
+- `src/domain/` e `src/application/` continuam sem nenhum import de `prom-client`, e a regra de lint que já bane o pacote no domínio segue valendo.
+- Contadores **por processo**, como D-010 já registrava. Com os workers no mesmo processo da API (D-063), um `/metrics` cobre HTTP e loops.
+- `MikroWalletRepository` passa a importar o módulo de métricas. É a exceção deliberada ao "só bordas": o único ponto de aquisição de lock (RI-06, D-002) é o único lugar de onde a espera é mensurável.
+- O módulo de métricas é avaliado uma vez; registrar o mesmo nome duas vezes lançaria, e o singleton é o que garante que não aconteça.
+- Teste que exercita worker ou borda mexe em contador global. É aceitável e até útil: o teste de integração de E-15 lê o `/metrics` depois de uma submissão real e confere que o contador andou.
+
+---
+
+## D-063 — E-15 sobe o processo: `main.ts`, workers montados e comando de migration (2026-09-03)
+
+**Status:** DECIDIDA
+**Contexto:** desde E-08 o "Estado atual" registra que não existe `main.ts` nem comando de migration, e desde E-10 que os workers (`OutboxPublisher`, depois `SqsWagerConsumer` e `PendingReferenceWorker`) **não estão montados em processo nenhum** — são classes exercitadas por teste. Nenhuma lista de escopo de E-14 ou E-15 os trazia. A lacuna vira problema imediato nesta etapa: `wager_retries_total` e `wager_dlq_messages_total` só existem dentro dos loops, e sem um processo que rode loop **e** sirva `/metrics` esses contadores nunca sairiam de zero.
+
+**Opções:**
+- **Escopo estrito**: entregar os três itens do roteiro e registrar a limitação em `ARCHITECTURE.md`.
+- **Montar os workers** no processo da API nesta etapa.
+- **Montar os workers e também `main.ts` e o comando de migration**, fechando o buraco estrutural inteiro.
+
+**Decisão:** a terceira. E-15 entrega `src/main.ts`, um `WorkersModule` que sobe os três loops no ciclo de vida da aplicação e um comando de migration (`bun run migration:up` / `migration:down`).
+
+**Justificativa:** metade da observabilidade seria inobservável sem isso — três das oito métricas vivem nos loops, e RF-17 pede readiness de PostgreSQL **e** SQS num processo que hoje não fala com SQS. Somando o fato de o README ser entregável avaliado e E-17 validá-lo executando do zero, adiar significaria descobrir na última etapa que o avaliador não consegue nem aplicar o schema. É ampliação de escopo consciente, decidida pelo mantenedor e registrada aqui — não uma etapa que "aproveitou para" fazer mais.
+
+**Consequências:**
+- **`AppModule` continua sendo só HTTP** (mais `/metrics` e health). Quem soma os workers é `main.ts`, via um módulo raiz próprio. Isso é deliberado: `tests/support/app-instance.ts` sobe o `AppModule` **três vezes** para RT-17, e se os workers estivessem nele, as três instâncias passariam a consumir SQS no meio da prova de concorrência.
+- O encerramento ordenado de RF-22 passa a existir de verdade: `enableShutdownHooks()` liga `SIGTERM` ao `onApplicationShutdown` do `WorkersModule`, que chama `stop()` nos três loops — o mesmo `stop()` que os testes já exercitam.
+- O comando de migration usa o `Migrator` que `orm-config.ts` já registra em `extensions` (E-05) e a mesma `migrationsList` explícita. Nenhuma segunda fonte de verdade de schema.
+- `PORT` entra como variável de ambiente, com `3000` de padrão. É a única variável nova da etapa.
+- `README.md` (E-17) passa a ter o que documentar: subir Compose, aplicar migration, iniciar o processo.

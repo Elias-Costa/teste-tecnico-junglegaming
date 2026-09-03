@@ -3,6 +3,7 @@ import { type EntityManager, LockMode } from "@mikro-orm/postgresql";
 import { WalletAlreadyExistsError } from "../../../application/errors/wallet-already-exists-error.ts";
 import type { WalletRepository } from "../../../domain/repositories/wallet-repository.ts";
 import type { Wallet } from "../../../domain/wallet.ts";
+import { startLockWaitTimer } from "../../observability/metrics.ts";
 import { toWallet, toWalletRow, toWalletUpdate } from "../mappers/wallet-mapper.ts";
 import { walletRowSchema } from "../rows/wallet-row.ts";
 import { violatedConstraintOf } from "../transient-error.ts";
@@ -79,13 +80,27 @@ export class MikroWalletRepository implements WalletRepository {
    * proteção sem proteger nada.
    */
   async findByIdForUpdate(id: string): Promise<Wallet | undefined> {
-    const row = await this.em.findOne(
-      walletRowSchema,
-      { id },
-      { ...READ_WITHOUT_IDENTITY_MAP, lockMode: LockMode.PESSIMISTIC_WRITE },
-    );
+    // `wallet_lock_wait_seconds` (D-010) é medido **aqui**, e este é o único
+    // ponto do código fora das bordas que conhece métrica (D-062): a espera pelo
+    // `FOR UPDATE` não é visível de nenhuma camada acima. Como a estratégia é
+    // pessimista (D-002), contenção aparece como fila — o histograma é a leitura
+    // de "conflitos de lock" que RNF-07 pede num sistema sem optimistic locking.
+    //
+    // O `finally` garante a observação também quando a query morre em deadlock
+    // (`40P01`): o tempo esperado até a falha é justamente o que interessa ali.
+    const stopTimer = startLockWaitTimer();
 
-    return row === null ? undefined : toWallet(row);
+    try {
+      const row = await this.em.findOne(
+        walletRowSchema,
+        { id },
+        { ...READ_WITHOUT_IDENTITY_MAP, lockMode: LockMode.PESSIMISTIC_WRITE },
+      );
+
+      return row === null ? undefined : toWallet(row);
+    } finally {
+      stopTimer();
+    }
   }
 
   async update(wallet: Wallet): Promise<void> {

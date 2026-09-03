@@ -23,6 +23,7 @@ import {
   type ReconciliationReport,
 } from "../../application/reconcile-wallet.ts";
 import { ID_GENERATOR } from "../../infrastructure/di-tokens.ts";
+import { recordReconciliationCheck } from "../../infrastructure/observability/metrics.ts";
 import { CORRELATION_HEADER, resolveCorrelationId } from "./correlation.ts";
 import { parseLedgerQuery } from "./dto/parse-ledger-query.ts";
 import { parseOpenWalletRequest } from "./dto/parse-open-wallet-request.ts";
@@ -130,7 +131,16 @@ export class WalletsController {
   ): Promise<ReconciliationReport> {
     this.echoCorrelation(correlationHeader, response);
 
-    return this.reconcileWallet.execute(uuidParam(walletId, "walletId"));
+    const report = await this.reconcileWallet.execute(uuidParam(walletId, "walletId"));
+
+    // `wallet_reconciliation_checks_total{consistent}` é contado **aqui**, e não
+    // no gancho `onDivergence` (D-060, D-062): o gancho só é avisado quando há
+    // divergência, e um contador sem as verificações consistentes daria o
+    // numerador sem o denominador. O gancho fica com o log, que é o que precisa
+    // dizer *qual* wallet divergiu.
+    recordReconciliationCheck(report.consistent);
+
+    return report;
   }
 
   /**

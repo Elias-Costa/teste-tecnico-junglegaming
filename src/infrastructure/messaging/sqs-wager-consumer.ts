@@ -15,6 +15,7 @@ import {
   type RetryEnv,
 } from "../config/retry-env.ts";
 import { readSqsEnv, type SqsEnv } from "../config/sqs-env.ts";
+import { recordDeadLetter, recordRetry } from "../observability/metrics.ts";
 import type { MessageDisposition, MessageHandler } from "./message-handler.ts";
 import { ensureQueue, resolveQueueUrl } from "./sqs-queue-provisioner.ts";
 
@@ -280,11 +281,20 @@ export class SqsWagerConsumer {
 
     if (disposition === "retry") {
       await this.scheduleRedelivery(message);
+      // `wager_retries_total{loop="sqs"}` (D-010, D-062): a devolução com backoff
+      // é a retentativa, e é contada **depois** de o SQS aceitar a mudança de
+      // visibilidade — antes seria contar uma tentativa que talvez não aconteça.
+      recordRetry("sqs");
 
       return;
     }
 
     await this.deadLetter(message);
+    // `wager_dlq_messages_total` conta só o envio explícito de D-046, e conta
+    // depois do envio bem-sucedido. O outro caminho de entrada da DLQ — a redrive
+    // policy esgotando as cinco entregas — acontece dentro do broker, onde nenhum
+    // contador deste processo alcança.
+    recordDeadLetter();
   }
 
   /**

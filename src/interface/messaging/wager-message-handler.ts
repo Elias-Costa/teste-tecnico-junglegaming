@@ -1,4 +1,10 @@
 import type { InboxLookup } from "../../application/inbox-lookup.ts";
+import type { Logger } from "../../application/ports/logger.ts";
+import {
+  recordDuplicate,
+  recordSubmission,
+  startProcessingTimer,
+} from "../../infrastructure/observability/metrics.ts";
 import { IdempotencyConflictError } from "../../application/errors/idempotency-conflict-error.ts";
 import { WalletNotFoundError } from "../../application/errors/wallet-not-found-error.ts";
 import type { ProcessWagerTransaction } from "../../application/process-wager-transaction.ts";
@@ -43,9 +49,16 @@ const INBOX_PRIMARY_KEY = "pk_inbox_messages";
  * neles apagaria a mensagem sem deixar traço em lugar nenhum, então vão à DLQ.
  */
 export class WagerMessageHandler implements MessageHandler {
+  /**
+   * @param logger obrigatório e **antes** do `consumerName`, que tem default
+   * (D-061). Um logger opcional viraria, na primeira composição distraída, um
+   * consumidor que manda mensagem para a DLQ sem deixar rastro — e a mensagem que
+   * foi para a DLQ é exatamente a que alguém vai investigar.
+   */
   constructor(
     private readonly processWagerTransaction: ProcessWagerTransaction,
     private readonly inbox: InboxLookup,
+    private readonly logger: Logger,
     private readonly consumerName: string = WAGER_TRANSACTIONS_CONSUMER,
   ) {}
 
@@ -65,27 +78,86 @@ export class WagerMessageHandler implements MessageHandler {
     } catch {
       // Payload que não abre não tem como ser reprocessado nem identificado pela
       // inbox — nem o `messageId` de D-044 está disponível. Reenviar não conserta.
+      // O `transportMessageId` é o **único** identificador que sobrou, e é
+      // exatamente para este caso que `ReceivedMessage` o carrega.
+      this.logger.warn("wager.message.unparseable", { messageId: message.transportMessageId });
+
       return "dead-letter";
     }
+
+    const { command } = parsed;
 
     try {
       if (await this.inbox.wasProcessed(this.consumerName, parsed.messageId)) {
         // A linha de inbox só existe se a transação financeira dela commitou
         // (RF-23): "já processada" e "o dinheiro já se moveu" são a mesma
         // afirmação, e é ela que autoriza o `ack` sem refazer trabalho (RF-19).
+        //
+        // Conta como duplicata (D-010): é o dedup de inbox, o irmão pela fila do
+        // replay idempotente de RF-14 — e a reentrega **não** vira transação, por
+        // isso não passa por `recordSubmission`.
+        recordDuplicate("sqs");
+
+        this.logger.info("wager.message.duplicate", {
+          correlationId: command.correlationId,
+          messageId: parsed.messageId,
+          walletId: command.walletId,
+          providerId: command.providerId,
+        });
+
         return "ack";
       }
 
-      await this.processWagerTransaction.execute({
-        ...parsed.command,
-        inbox: { consumerName: this.consumerName, messageId: parsed.messageId },
-      });
+      // Cronômetro de `wager_processing_seconds{source="sqs"}`. O mesmo use case
+      // do HTTP (RF-18), medido pela borda que o chamou — é o label `source` que
+      // separa uma API lenta de um consumidor lento.
+      const stopTimer = startProcessingTimer("sqs");
+
+      try {
+        const result = await this.processWagerTransaction.execute({
+          ...command,
+          inbox: { consumerName: this.consumerName, messageId: parsed.messageId },
+        });
+
+        recordSubmission({
+          source: "sqs",
+          status: result.status,
+          kind: command.kind,
+          idempotentReplay: result.idempotentReplay,
+        });
+
+        this.logger.info("wager.message.processed", {
+          correlationId: command.correlationId,
+          messageId: parsed.messageId,
+          transactionId: result.transactionId,
+          walletId: command.walletId,
+          providerId: command.providerId,
+          kind: command.kind,
+          status: result.status,
+          failureCode: result.failureCode,
+        });
+      } finally {
+        stopTimer();
+      }
 
       // Chegou aqui, commitou. O `ack` de RF-20 acontece depois deste retorno,
       // no transporte — nunca antes, porque o transporte só age sobre o desfecho.
       return "ack";
     } catch (error) {
-      return dispositionFor(error);
+      const disposition = dispositionFor(error);
+
+      // O log do desfecho de erro é o que RNF-06 pede e o que faltava: sem ele,
+      // uma mensagem que foi para a DLQ some do processo sem deixar rastro — e é
+      // justamente a que alguém vai investigar.
+      this.logger.error(`wager.message.${disposition}`, error, {
+        correlationId: command.correlationId,
+        messageId: parsed.messageId,
+        walletId: command.walletId,
+        providerId: command.providerId,
+        kind: command.kind,
+      });
+
+      return disposition;
     }
   }
 }

@@ -64,6 +64,7 @@ import {
   resolveQueueUrl,
 } from "../../src/infrastructure/messaging/sqs-queue-provisioner.ts";
 import { SqsWagerConsumer } from "../../src/infrastructure/messaging/sqs-wager-consumer.ts";
+import { JsonLogger } from "../../src/infrastructure/observability/json-logger.ts";
 import { MikroUnitOfWork } from "../../src/infrastructure/persistence/mikro-unit-of-work.ts";
 import { buildOrmConfig } from "../../src/infrastructure/persistence/orm-config.ts";
 import { SystemClock } from "../../src/infrastructure/system-clock.ts";
@@ -119,6 +120,12 @@ function handlerSobre(alvo: MikroORM): WagerMessageHandler {
   return new WagerMessageHandler(
     new ProcessWagerTransaction(unitOfWork, new SystemClock(), new UuidV7IdGenerator()),
     new InboxLookup(unitOfWork),
+    // Logger de verdade, com o destino trocado: RNF-06 é exercitado junto do
+    // consumidor, mas a saída do teste não deve virar despejo de log. Trocar o
+    // destino não é substituir o mecanismo — a serialização testada é a mesma.
+    new JsonLogger(() => {
+      /* silencioso durante o teste */
+    }),
   );
 }
 

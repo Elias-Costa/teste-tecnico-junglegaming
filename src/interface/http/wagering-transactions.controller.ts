@@ -4,12 +4,17 @@ import {
   type WagerTransactionView,
 } from "../../application/get-wager-transaction.ts";
 import type { IdGenerator } from "../../application/ports/id-generator.ts";
+import type { Logger } from "../../application/ports/logger.ts";
 import type { ProviderIdentityPort } from "../../application/ports/provider-identity.ts";
 import {
   ProcessWagerTransaction,
   type ProcessWagerTransactionResult,
 } from "../../application/process-wager-transaction.ts";
-import { ID_GENERATOR, PROVIDER_IDENTITY } from "../../infrastructure/di-tokens.ts";
+import { ID_GENERATOR, LOGGER, PROVIDER_IDENTITY } from "../../infrastructure/di-tokens.ts";
+import {
+  recordSubmission,
+  startProcessingTimer,
+} from "../../infrastructure/observability/metrics.ts";
 import { CORRELATION_HEADER, resolveCorrelationId } from "./correlation.ts";
 import { parseSubmitTransactionRequest } from "./dto/parse-submit-transaction-request.ts";
 import { uuidParam } from "./dto/parse.ts";
@@ -39,6 +44,7 @@ export class WageringTransactionsController {
     private readonly getTransaction: GetWagerTransaction,
     @Inject(PROVIDER_IDENTITY) private readonly identity: ProviderIdentityPort,
     @Inject(ID_GENERATOR) private readonly ids: IdGenerator,
+    @Inject(LOGGER) private readonly logger: Logger,
   ) {}
 
   /**
@@ -70,11 +76,39 @@ export class WageringTransactionsController {
       command.providerId,
     );
 
-    const result = await this.process.execute({ ...command, providerId });
+    // Cronômetro de `wager_processing_seconds{source="http"}` (D-010, D-062). O
+    // encerramento vai em `finally`: a latência de uma requisição que terminou em
+    // `503` é latência igual, e omiti-la esconderia justamente o percentil ruim.
+    const stopTimer = startProcessingTimer("http");
 
-    response.status(httpStatusForResult(result.status));
+    try {
+      const result = await this.process.execute({ ...command, providerId });
 
-    return result;
+      // A borda é quem instrumenta (D-062): ela tem `kind` do comando e `status`
+      // do resultado, então o use case continua sem conhecer métrica nenhuma.
+      recordSubmission({
+        source: "http",
+        status: result.status,
+        kind: command.kind,
+        idempotentReplay: result.idempotentReplay,
+      });
+
+      this.logger.info("wager.transaction.processed", {
+        correlationId,
+        transactionId: result.transactionId,
+        walletId: command.walletId,
+        providerId,
+        kind: command.kind,
+        status: result.status,
+        failureCode: result.failureCode,
+      });
+
+      response.status(httpStatusForResult(result.status));
+
+      return result;
+    } finally {
+      stopTimer();
+    }
   }
 
   /**

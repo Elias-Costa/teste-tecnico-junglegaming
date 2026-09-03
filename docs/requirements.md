@@ -147,7 +147,7 @@ Submete uma operação de aposta.
 - **A leitura acontece sob o lock da wallet** — `[DECIDIDO: D-057]`. Em READ COMMITTED, ler o saldo e depois o ledger sem lock veria dois instantes distintos, e uma aposta confirmada entre as duas leituras produziria divergência falsa num sinal que este requisito manda logar e contabilizar. É o mesmo `findByIdForUpdate` de D-002, então continua havendo **um** ponto de aquisição de lock (RI-06).
 - `difference` é `storedBalance − calculatedBalance`, e a direção é contrato (D-057). Divergência responde `200` com `consistent: false` — devolver erro confundiria "o sistema está inconsistente" com "a verificação falhou".
 - O ledger é somado em páginas pelo keyset de D-014: o endpoint não depende do tamanho do ledger para caber na memória.
-- **A métrica ainda não existe: `D-060` está EM ABERTO** e endereçada a E-15, porque a tabela fechada de D-010 não nomeia nenhuma métrica de reconciliação. E-14 entrega a sinalização na resposta e um gancho `onDivergence` injetado, na mesma forma do `onCycleError` de E-10.
+- **A métrica é `wallet_reconciliation_checks_total{consistent}`** — `[DECIDIDO: D-060]`, oitava linha da tabela de D-010. Conta **toda** verificação e separa por desfecho: contar só a divergência daria o numerador sem o denominador. Incrementada na borda (D-062), porque o gancho `onDivergence` só é avisado quando há divergência; o gancho ficou com o **log** que este requisito também exige, com `walletId` e sem `difference` — valor monetário não entra em log (RNF-06).
 - Wallet inexistente é `404` (D-056); id malformado na rota é `400`.
 
 **RF-17 — Health checks**
@@ -262,9 +262,9 @@ Toda rejeição carrega um `failureCode` estável e legível por máquina, sufic
 
 **RNF-05 — Ordenação e dedup do broker são otimização, não garantia.** O banco continua responsável pelas invariantes (RI-03).
 
-**RNF-06 — Logs estruturados** (§12): JSON, com `correlationId`, `messageId`, `transactionId`, `walletId`, `providerId`. **Sem dados sensíveis ou payloads financeiros completos nos logs.**
+**RNF-06 — Logs estruturados** (§12): JSON, com `correlationId`, `messageId`, `transactionId`, `walletId`, `providerId`. **Sem dados sensíveis ou payloads financeiros completos nos logs.** `[DECIDIDO: D-061]` — logger JSON próprio atrás de uma porta, com o conjunto de campos **fechado em tipo**: a proibição da segunda frase passa a ser erro de compilação, e não disciplina de quem escreve. O erro logado é reduzido a `name` e `message`, porque um erro do driver do PostgreSQL carrega os parâmetros da query — que neste sistema são dinheiro.
 
-**RNF-07 — Métricas** cobrindo no mínimo: transações por status, duplicatas detectadas, retries, mensagens em DLQ, conflitos de lock, **outbox lag** e latência de processamento. `[DECIDIDO: D-010]` — `prom-client` em `GET /metrics`, com a nomenclatura fechada na tabela de D-010.
+**RNF-07 — Métricas** cobrindo no mínimo: transações por status, duplicatas detectadas, retries, mensagens em DLQ, conflitos de lock, **outbox lag** e latência de processamento. `[DECIDIDO: D-010]` — `prom-client` em `GET /metrics`, com a nomenclatura fechada na tabela de D-010 (oito linhas desde D-060). `[DECIDIDO: D-062]` — quem incrementa são as **bordas** e os laços; a única exceção é `wallet_lock_wait_seconds`, medido dentro de `findByIdForUpdate`, porque a espera pelo `FOR UPDATE` não é visível de nenhuma camada acima. `src/domain` e `src/application` seguem sem conhecer métrica.
 
 **RNF-08 — Entregáveis de documentação** (§14): `README.md` com setup e comandos executáveis do zero; `ARCHITECTURE.md` com decisões, trade-offs e **limitações conhecidas**.
 
