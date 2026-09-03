@@ -1,29 +1,25 @@
 import { InvalidLedgerEntryError } from "../domain/errors/invalid-ledger-entry-error.ts";
-import type { EventContext, IntegrationEvent } from "../domain/events/integration-event.ts";
-import { WagerTransactionPendingReference } from "../domain/events/wager-transaction-pending-reference.ts";
-import { WagerTransactionProcessed } from "../domain/events/wager-transaction-processed.ts";
-import { WagerTransactionRejected } from "../domain/events/wager-transaction-rejected.ts";
-import { WalletBalanceChanged } from "../domain/events/wallet-balance-changed.ts";
 import { BusinessFailureCode, type FailureCode } from "../domain/failure-code.ts";
 import { InboxMessage } from "../domain/inbox-message.ts";
 import { LedgerDirection } from "../domain/ledger-direction.ts";
 import { Money, type MoneyProps } from "../domain/money.ts";
-import { OutboxMessage } from "../domain/outbox-message.ts";
 import {
   WagerTransaction,
   WagerTransactionKind,
   WagerTransactionStatus,
 } from "../domain/wager-transaction.ts";
 import type { Wallet } from "../domain/wallet.ts";
-import type { WalletLedgerEntry } from "../domain/wallet-ledger-entry.ts";
 import { IdempotencyConflictError } from "./errors/idempotency-conflict-error.ts";
 import { KindNotSubmittableError } from "./errors/kind-not-submittable-error.ts";
 import { UnresolvablePendingReferenceError } from "./errors/unresolvable-pending-reference-error.ts";
 import { WalletNotFoundError } from "./errors/wallet-not-found-error.ts";
+import { OutboxEventRecorder } from "./outbox-event-recorder.ts";
 import { payloadHashOf } from "./payload-hash.ts";
 import type { Clock } from "./ports/clock.ts";
 import type { IdGenerator } from "./ports/id-generator.ts";
 import type { TransactionalRepositories, UnitOfWork } from "./ports/unit-of-work.ts";
+import { decideReversal, isReversalKind, type ReversalKind } from "./reversal-policy.ts";
+import type { TransactionOutcome } from "./transaction-outcome.ts";
 
 /**
  * Identidade da mensagem, quando a entrada é a fila (RF-19, RF-23).
@@ -75,72 +71,6 @@ export interface ProcessWagerTransactionResult {
 }
 
 /**
- * Desfecho de negócio de uma transação, com o que cada caminho produz.
- *
- * União discriminada em vez de ler `transaction.failureCode` depois: aquele
- * getter é a união com os códigos de infraestrutura, e `WagerTransactionRejected`
- * exige um `BusinessFailureCode` por decisão de RF-25. Carregar o código no
- * desfecho entrega ao evento exatamente o tipo que ele pede, sem narrowing.
- *
- * O `entry` opcional de `processed` **é** RN-03 no tipo: `LOSS` é uma transação
- * aplicada que não move saldo e não gera lançamento. Como `WalletBalanceChanged`
- * se constrói a partir do lançamento (D-018), a ausência dele é o que faz o
- * evento não ser publicado — sem `if` sobre kind em lugar nenhum (RF-25).
- */
-type TransactionOutcome =
-  | { readonly outcome: "processed"; readonly entry: WalletLedgerEntry | undefined }
-  | { readonly outcome: "rejected"; readonly failureCode: BusinessFailureCode }
-  | { readonly outcome: "pending-reference" };
-
-/**
- * Rastro que um evento de integração herda de quem provocou o desfecho (RNF-06).
- *
- * Existe porque **os desfechos têm duas origens**: a submissão, que traz a
- * correlação do provedor no comando, e o worker de RF-26, que resolve uma
- * `PENDING_REFERENCE` fora de qualquer requisição e relê a correlação guardada na
- * própria transação (D-055). Tipar o rastro em vez de passar o comando é o que
- * permite os dois caminhos alimentarem o mesmo `contextFor`.
- */
-interface EventTrace {
-  correlationId: string;
-  causationId?: string | undefined;
-}
-
-/** Os dois kinds que revertem outra transação (RN-04, RN-05). */
-type ReversalKind = WagerTransactionKind.Refund | WagerTransactionKind.Rollback;
-
-/**
- * Estreita o kind para os dois que revertem (RN-04, RN-05).
- *
- * O compilador conhece `ReversalKind` pelo `switch` de `decide`, mas não tem como
- * derivá-lo de uma linha **lida do banco**: `resolvePendingReference` recebe um id
- * e precisa recuperar a garantia que o caminho de submissão tinha de graça.
- */
-function isReversalKind(kind: WagerTransactionKind): kind is ReversalKind {
-  return kind === WagerTransactionKind.Refund || kind === WagerTransactionKind.Rollback;
-}
-
-/**
- * O que cada reversão pode referenciar (RN-08).
- *
- * Tabela e não `if`: a regra é uma matriz de duas linhas no enunciado (§7), e
- * escrevê-la como matriz mantém a correspondência visível para quem confere o
- * código contra o documento. `LOSS`, `OPENING` e `ROLLBACK` não aparecem em
- * nenhuma das listas, e é isso que faz reverter um estorno ser
- * `INVALID_REFERENCE_KIND` em vez de recursão.
- */
-const REVERSIBLE_REFERENCE_KINDS: Readonly<
-  Record<ReversalKind, readonly WagerTransactionKind[]>
-> = {
-  [WagerTransactionKind.Refund]: [WagerTransactionKind.Bet],
-  [WagerTransactionKind.Rollback]: [
-    WagerTransactionKind.Bet,
-    WagerTransactionKind.Win,
-    WagerTransactionKind.Refund,
-  ],
-};
-
-/**
  * Processa uma operação de aposta (RF-18, RF-23, RN-01).
  *
  * **Use case único**, compartilhado pela entrada HTTP e pelo consumidor SQS: um
@@ -155,13 +85,32 @@ const REVERSIBLE_REFERENCE_KINDS: Readonly<
  * A transação é curta e **não contém I/O externo**, que é o que torna o lock
  * pessimista de D-002 seguro aqui: nenhuma conexão fica segurada durante chamada
  * de rede.
+ *
+ * **O que este arquivo deixou de fazer, por D-066:** decidir a reversão — que é
+ * `decideReversal`, em `reversal-policy.ts` — e traduzir desfecho em evento —
+ * que é `OutboxEventRecorder`. O que sobra aqui é orquestração: travar, conferir
+ * idempotência, decidir, persistir na ordem das chaves estrangeiras e registrar a
+ * entrega. A movimentação de saldo **não** saiu, de propósito: ela é o assunto
+ * desta transação.
  */
 export class ProcessWagerTransaction {
+  /**
+   * Emissor dos eventos do desfecho (D-066, RF-25).
+   *
+   * Construído aqui, e não injetado: ele não tem estado nem configuração — só o
+   * `IdGenerator` que este use case já recebe —, então exigi-lo no construtor
+   * espalharia uma dependência a mais por cada composição do grafo, sem dar a
+   * ninguém a chance de trocá-la por outra coisa.
+   */
+  private readonly events: OutboxEventRecorder;
+
   constructor(
     private readonly unitOfWork: UnitOfWork,
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
-  ) {}
+  ) {
+    this.events = new OutboxEventRecorder(ids);
+  }
 
   /**
    * Executa o comando e devolve o desfecho.
@@ -304,7 +253,7 @@ export class ProcessWagerTransaction {
         throw new UnresolvablePendingReferenceError(transaction.id, kind);
       }
 
-      const decided = await this.decideReversal(
+      const decided = await this.applyReversal(
         repos,
         wallet,
         transaction,
@@ -367,8 +316,8 @@ export class ProcessWagerTransaction {
       await repos.ledger.insert(result.entry);
     }
 
-    await this.enqueueEvents(
-      repos,
+    await this.events.record(
+      repos.outbox,
       {
         correlationId: transaction.correlationId ?? this.ids.next(),
         causationId: transaction.id,
@@ -484,7 +433,7 @@ export class ProcessWagerTransaction {
     }
 
     await this.recordInbox(repos, command, payloadHash, now);
-    await this.enqueueEvents(repos, command, transaction, wallet, result, now);
+    await this.events.record(repos.outbox, command, transaction, wallet, result, now);
 
     return {
       transactionId: transaction.id,
@@ -552,7 +501,7 @@ export class ProcessWagerTransaction {
 
       case WagerTransactionKind.Refund:
       case WagerTransactionKind.Rollback:
-        return this.decideReversal(repos, wallet, transaction, money, kind, now);
+        return this.applyReversal(repos, wallet, transaction, money, kind, now);
 
       case WagerTransactionKind.Opening:
         // Inalcançável pelas duas bordas, que já barram `OPENING` no parser
@@ -563,16 +512,19 @@ export class ProcessWagerTransaction {
   }
 
   /**
-   * Decide `REFUND` e `ROLLBACK` resolvendo a transação referenciada (RN-04..RN-10).
+   * Aplica ao agregado o veredito da política de reversão (RN-04..RN-10, D-066).
    *
-   * **A ordem dos `if` é a ordem de D-051**, e não é arbitrária: primeiro tudo
-   * que o provedor corrige no payload (`REFERENCE_MISMATCH`,
-   * `INVALID_REFERENCE_KIND`, `AMOUNT_MISMATCH`), depois o que o manda desistir
-   * (`ALREADY_REVERSED`) e por último o que o manda escalar
-   * (`INSUFFICIENT_FUNDS_ON_REVERSAL`). Quando duas regras são violadas ao mesmo
-   * tempo, o provedor recebe o código sobre o qual ele consegue agir.
+   * A decisão inteira mora em `decideReversal`; o que acontece aqui é a
+   * tradução dela em efeito — esperar, rejeitar com o código que a política
+   * escolheu, ou mover o saldo na direção que ela calculou. A separação é o
+   * ponto de D-066: quem decide não muta, e quem muta não decide.
+   *
+   * O único código que **não** vem da política é
+   * `INSUFFICIENT_FUNDS_ON_REVERSAL` (RN-16): ele depende do saldo da wallet
+   * travada, e não da referência, então continua sendo decidido aqui — junto do
+   * saldo que o justifica.
    */
-  private async decideReversal(
+  private async applyReversal(
     repos: TransactionalRepositories,
     wallet: Wallet,
     transaction: WagerTransaction,
@@ -580,71 +532,19 @@ export class ProcessWagerTransaction {
     kind: ReversalKind,
     now: Date,
   ): Promise<TransactionOutcome> {
-    // Garantido por `WagerTransaction.create`, que recusa `REFUND`/`ROLLBACK` sem
-    // referência com `MissingReferenceError` (D-020, RN-06 → 400).
-    const referenceExternalId = transaction.referenceExternalTransactionId ?? "";
+    const verdict = await decideReversal(repos.transactions, transaction, money, kind);
 
-    const reference = await repos.transactions.findByProviderExternalId(
-      transaction.providerId,
-      referenceExternalId,
-    );
-
-    // RN-15: a referência pode simplesmente ainda não ter chegado. Não é
-    // rejeição — a transação espera e o worker de RF-26 a resolve.
-    if (reference === undefined) {
+    if (verdict.verdict === "wait") {
       return { outcome: "pending-reference" };
     }
 
-    // D-050: quem ainda pode virar `PROCESSED` espera; quem não pode mais é
-    // rejeitado agora. Uma referência em `PENDING_REFERENCE` está ela própria
-    // aguardando (cadeia fora de ordem); uma em `REJECTED`/`FAILED` é terminal
-    // por D-013 e nunca vai ser reversível.
-    if (reference.status === WagerTransactionStatus.PendingReference) {
-      return { outcome: "pending-reference" };
+    if (verdict.verdict === "reject") {
+      return this.rejectWith(transaction, wallet, verdict.failureCode);
     }
 
-    if (reference.status !== WagerTransactionStatus.Processed) {
-      return this.rejectWith(transaction, wallet, BusinessFailureCode.ReferenceMismatch);
-    }
-
-    // RN-07: mesmo provider, player, wallet, moeda e rodada. O provider já é
-    // critério da busca, então os quatro restantes são os que sobram para checar.
-    if (
-      reference.playerId !== transaction.playerId ||
-      reference.walletId !== transaction.walletId ||
-      reference.money.currency !== money.currency ||
-      reference.roundId !== transaction.roundId
-    ) {
-      return this.rejectWith(transaction, wallet, BusinessFailureCode.ReferenceMismatch);
-    }
-
-    // RN-08. **Este passo protege o cálculo de direção lá embaixo:**
-    // `ledgerDirectionFor` lança `NoLedgerDirectionError` se a referência for
-    // `LOSS` ou `ROLLBACK`, e é esta lista que garante que ela nunca é chamada
-    // com uma dessas.
-    if (!REVERSIBLE_REFERENCE_KINDS[kind].includes(reference.kind)) {
-      return this.rejectWith(transaction, wallet, BusinessFailureCode.InvalidReferenceKind);
-    }
-
-    // RN-10: reversão parcial está fora de escopo. Seguro depois do check de
-    // moeda acima — `equals` lança entre moedas diferentes (D-017).
-    if (!reference.money.equals(money)) {
-      return this.rejectWith(transaction, wallet, BusinessFailureCode.AmountMismatch);
-    }
-
-    // RN-09, caminho de negócio. A garantia é o índice parcial de D-024, que
-    // continua valendo se duas instâncias perguntarem ao mesmo tempo.
-    if (await repos.transactions.hasProcessedReversal(reference.id, kind)) {
-      return this.rejectWith(transaction, wallet, BusinessFailureCode.AlreadyReversed);
-    }
-
-    // RN-05: a direção é o inverso da referência para `ROLLBACK`; `REFUND` sempre
-    // credita (RN-04). Estornar um `WIN` ou um `REFUND`, portanto, **debita**.
-    const direction = transaction.ledgerDirectionFor(reference);
-
-    return this.applyMovement(direction, wallet, transaction, money, now, {
+    return this.applyMovement(verdict.direction, wallet, transaction, money, now, {
       undefinedReferenceId: false,
-      referenceId: reference.id,
+      referenceId: verdict.referenceId,
       // RN-16: reverter sem saldo é anomalia operacional, não rotina — e por
       // isso tem código próprio, distinto do de uma aposta sem saldo.
       insufficientFundsCode: BusinessFailureCode.InsufficientFundsOnReversal,
@@ -733,86 +633,6 @@ export class ProcessWagerTransaction {
     message.markProcessed(now);
 
     await repos.inbox.insert(message);
-  }
-
-  /**
-   * Enfileira os eventos do desfecho na outbox (RF-25, RF-23).
-   *
-   * Os três desfechos de `TransactionOutcome` têm um evento cada, e a tabela de
-   * RF-25 é lida inteira aqui — `WagerTransactionProcessed` para qualquer
-   * transação aplicada **inclusive `LOSS`**, `WagerTransactionRejected` para
-   * rejeição de negócio e `WagerTransactionPendingReference` para a referência
-   * que ainda não chegou.
-   *
-   * `WalletBalanceChanged` sai **somente** quando o saldo mudou, e por isso é
-   * construído a partir do lançamento que o movimento devolveu (D-018): não há
-   * assinatura aqui capaz de anunciar mudança de saldo sem ter o lançamento que
-   * a comprova. É também o que faz `LOSS` publicar um evento e não dois, sem
-   * nenhum teste de kind neste método.
-   */
-  private async enqueueEvents(
-    repos: TransactionalRepositories,
-    trace: EventTrace,
-    transaction: WagerTransaction,
-    wallet: Wallet,
-    result: TransactionOutcome,
-    now: Date,
-  ): Promise<void> {
-    if (result.outcome === "rejected") {
-      await this.enqueue(
-        repos,
-        WagerTransactionRejected.from(
-          transaction,
-          result.failureCode,
-          this.contextFor(trace, now),
-        ),
-      );
-
-      return;
-    }
-
-    if (result.outcome === "pending-reference") {
-      await this.enqueue(
-        repos,
-        WagerTransactionPendingReference.from(transaction, this.contextFor(trace, now)),
-      );
-
-      return;
-    }
-
-    await this.enqueue(
-      repos,
-      WagerTransactionProcessed.from(transaction, this.contextFor(trace, now)),
-    );
-
-    if (result.entry === undefined) {
-      // `LOSS` (RN-03): a transação foi aplicada, mas o saldo não mudou. Publicar
-      // `WalletBalanceChanged` aqui seria anunciar uma mudança que não houve.
-      return;
-    }
-
-    await this.enqueue(
-      repos,
-      WalletBalanceChanged.from(wallet, result.entry, this.contextFor(trace, now)),
-    );
-  }
-
-  /** Grava uma linha da outbox. **Único** caminho de publicação (RI-04, EL-06). */
-  private async enqueue(
-    repos: TransactionalRepositories,
-    event: IntegrationEvent<unknown>,
-  ): Promise<void> {
-    await repos.outbox.insert(OutboxMessage.enqueue({ id: this.ids.next(), event }));
-  }
-
-  /** Contexto de rastreio de um evento — `eventId` novo, correlação de quem chamou. */
-  private contextFor(trace: EventTrace, now: Date): EventContext {
-    return {
-      eventId: this.ids.next(),
-      correlationId: trace.correlationId,
-      ...(trace.causationId === undefined ? {} : { causationId: trace.causationId }),
-      occurredAt: now,
-    };
   }
 }
 
