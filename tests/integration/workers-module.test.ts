@@ -28,6 +28,7 @@ import { Wallet } from "../../src/domain/wallet.ts";
 import { buildOrmConfig } from "../../src/infrastructure/persistence/orm-config.ts";
 import { MikroOutboxRepository } from "../../src/infrastructure/persistence/repositories/mikro-outbox-repository.ts";
 import { WorkersModule } from "../../src/interface/workers/workers.module.ts";
+import { aguardar } from "../support/concurrency-harness.ts";
 
 let orm: MikroORM;
 let app: INestApplication;
@@ -87,24 +88,13 @@ async function publicadaEm(id: string): Promise<Date | undefined> {
 }
 
 /**
- * Espera a condição por até `limiteMs`, checando a cada 100 ms.
+ * Intervalo de sondagem passado a `aguardar`, em vez do default de 25 ms.
  *
- * O worker roda no próprio ritmo; esperar por um instante fixo produziria teste
- * lento no melhor caso e intermitente no pior.
+ * O worker roda no próprio ritmo, e 100 ms é frequente o bastante para não somar
+ * latência perceptível ao caso feliz e esparso o bastante para não martelar o
+ * banco com uma consulta a cada 25 ms durante os 15 s de prazo.
  */
-async function aguardar(condicao: () => Promise<boolean>, limiteMs = 15_000): Promise<boolean> {
-  const limite = Date.now() + limiteMs;
-
-  while (Date.now() < limite) {
-    if (await condicao()) {
-      return true;
-    }
-
-    await Bun.sleep(100);
-  }
-
-  return false;
-}
+const INTERVALO_MS = 100;
 
 /** Valor original de `CONSUMER_WAIT_TIME_SEC`, restaurado ao fim. */
 const esperaOriginal = process.env.CONSUMER_WAIT_TIME_SEC;
@@ -143,11 +133,17 @@ describe("WorkersModule (D-063)", () => {
   it("publica uma linha da outbox sem ninguém chamar o worker à mão (RF-24)", async () => {
     const mensagem = await semearMensagem();
 
-    const publicou = await aguardar(async () => (await publicadaEm(mensagem.id)) !== undefined);
-
     // É a diferença que D-063 fez: antes desta etapa, esta linha ficaria pendente
     // para sempre num processo real, porque ninguém instanciava o publisher.
-    expect(publicou).toBe(true);
+    // `aguardar` **lança** no estouro do prazo, então a asserção é ela retornar:
+    // o prazo vencido vira "a linha da outbox ser publicada não aconteceu em
+    // 15000ms" em vez de um `expect(false)` que não diz o que se esperava.
+    await aguardar(
+      async () => (await publicadaEm(mensagem.id)) !== undefined,
+      15_000,
+      "a linha da outbox ser publicada pelo laço do WorkersModule",
+      INTERVALO_MS,
+    );
   });
 
   it("encerra os três laços no shutdown da aplicação (RF-22)", async () => {
@@ -159,11 +155,15 @@ describe("WorkersModule (D-063)", () => {
     // Depois do encerramento, uma linha nova **não** é publicada: os laços
     // pararam de verdade, em vez de continuarem rodando órfãos.
     const orfa = await semearMensagem();
-    const publicou = await aguardar(
-      async () => (await publicadaEm(orfa.id)) !== undefined,
-      2_000,
-    );
 
-    expect(publicou).toBe(false);
+    // **Este caso não usa `aguardar`, e é deliberado.** `aguardar` sonda até a
+    // condição ficar verdadeira — é a forma de provar que algo *acontece*, e
+    // ausência não se prova procurando presença. Aqui a asserção é a oposta:
+    // dá-se ao laço uma janela de graça generosa em relação ao seu período de
+    // poll (`OUTBOX_POLL_INTERVAL_MS`, 1 s por default) e lê-se o estado uma vez.
+    // Um laço órfão publicaria dentro dela; um laço encerrado, não.
+    await Bun.sleep(2_000);
+
+    expect(await publicadaEm(orfa.id)).toBeUndefined();
   }, 20_000);
 });
