@@ -133,9 +133,12 @@ export class WagerWorkers implements OnApplicationBootstrap, OnApplicationShutdo
    * série faria o pior caso ser a soma das esperas — inclusive o `waitTimeSec` do
    * long polling do consumidor.
    *
-   * O cliente do SQS de saída só é fechado **depois** de os laços pararem: fechar
-   * antes cortaria o socket de uma publicação em andamento, que é exatamente a
-   * mensagem que RF-24 não pode perder.
+   * **Os dois** clientes de SQS são fechados, e só **depois** de os laços pararem:
+   * fechar antes cortaria o socket de uma publicação em andamento, que é
+   * exatamente a mensagem que RF-24 não pode perder. O de entrada é simétrico ao
+   * de saída e ao de `ReadinessProbes` — cada um destrói o que abriu. Sem o do
+   * consumidor, o pool de sockets sobrevive ao `close()` da aplicação e o processo
+   * fica pendurado numa conexão que ninguém mais usa.
    */
   async onApplicationShutdown(): Promise<void> {
     await Promise.all([
@@ -145,6 +148,7 @@ export class WagerWorkers implements OnApplicationBootstrap, OnApplicationShutdo
     ]);
 
     this.events?.close();
+    this.consumer?.close();
 
     this.logger.info("workers.stopped");
   }
