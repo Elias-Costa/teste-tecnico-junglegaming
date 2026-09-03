@@ -358,6 +358,7 @@ Cortes e trade-offs assumidos conscientemente. Um corte documentado é engenhari
 
 - **Throughput por wallet é serial por construção.** É o preço direto de D-002: uma hot wallet é o gargalo, e o pessimistic o torna explícito em vez de escondê-lo em retries. O enunciado não define meta de RPS. Se houvesse, o caminho seria particionar a wallet em sub-saldos — o que muda o modelo, não a estratégia de lock.
 - **Não há teste de carga.** É diferencial opcional, e o núcleo tinha prioridade. Sem ele, não há número de throughput, p95 ou outbox lag sob carga para apresentar — só a garantia de correção sob contenção, que é o que os testes de concorrência provam.
+- **A reconciliação segura o lock da wallet durante a varredura inteira do ledger** (D-057). `POST /wallets/:id/reconciliation` entra pelo mesmo `findByIdForUpdate` e só commita depois de dobrar o ledger em páginas de 500 — então uma wallet com histórico longo bloqueia o próprio caminho do dinheiro enquanto o relatório é montado, e a espera aparece em `wallet_lock_wait_seconds` para operações que nada têm a ver com a auditoria. É o custo que D-057 aceitou para não acusar divergência falsa em READ COMMITTED, e ele **não tem teto**: limitar a varredura mudaria o contrato de RF-16, que pede o saldo reconstruído do ledger inteiro — um relatório parcial rotulado como reconciliação é pior que um lento. Quem operar isso em produção agenda a chamada, em vez de expô-la no caminho quente.
 
 ### Da mensageria
 
