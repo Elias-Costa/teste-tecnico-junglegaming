@@ -61,7 +61,7 @@ O schema é passo de operação, **não** efeito colateral do boot: a aplicaçã
 bun run start
 ```
 
-Sobe **um** processo que serve o HTTP na porta `3000` **e** roda os três laços de mensageria (publicador da outbox, consumidor da fila de comandos, resolvedor de referências fora de ordem). As três filas SQS são criadas automaticamente na primeira publicação — não há fila para criar à mão.
+Sobe **um** processo que serve o HTTP na porta `3000` **e** roda os três laços de mensageria (publicador da outbox, consumidor da fila de comandos, resolvedor de referências fora de ordem). As três filas SQS são criadas pelo próprio serviço, de forma idempotente (D-041), e não há fila para criar à mão — mas em **dois momentos distintos**: `wager-transactions.fifo` e a DLQ dela nascem no boot do consumidor, junto com a redrive policy; `wagering-events.fifo` nasce na primeira publicação da outbox.
 
 ---
 
@@ -177,8 +177,10 @@ Um segundo depois, o saldo caiu de `70.00` para `50.00` e o `correlationId` do e
 
 ### As métricas se movendo
 
+O segundo `grep` existe porque `wallet_lock_wait_seconds` e `wager_processing_seconds` são **histogramas**: além do `_count` abaixo, eles emitem uma linha `_bucket` por faixa e uma `_sum`, que afogariam as oito métricas num despejo de dezenas de linhas.
+
 ```bash
-curl -s localhost:3000/metrics | grep -E '^wager_|^wallet_|^outbox_'
+curl -s localhost:3000/metrics | grep -E '^(wager|wallet|outbox)_' | grep -vE '_bucket|_sum'
 ```
 ```
 wager_transactions_total{status="PROCESSED",kind="BET"} 2
@@ -196,13 +198,16 @@ outbox_lag_seconds 0
 As três filas são provisionadas pelo próprio serviço, de forma idempotente:
 
 ```bash
-docker exec wagering-localstack awslocal sqs list-queues
+docker exec wagering-localstack awslocal sqs list-queues \
+  --query 'QueueUrls[]' --output text | tr '\t' '\n' | sed 's#.*/##'
 ```
 ```
 wager-transactions.fifo
 wager-transactions-dlq.fifo
 wagering-events.fifo
 ```
+
+`list-queues` cru devolve um JSON com as **URLs** completas; o `--query` e o `sed` ficam com o que interessa aqui, que é o nome.
 
 E a outbox drenou para a fila de saída de verdade:
 
@@ -272,7 +277,7 @@ Os cinco desfechos de `POST /wagering/transactions` são códigos **distintos** 
 | `wager-transactions-dlq.fifo` | erro permanente, por envio explícito **ou** por redrive policy |
 | `wagering-events.fifo` | saída — eventos de integração publicados pela outbox |
 
-Todas FIFO, todas provisionadas pelo próprio serviço na primeira publicação. Envelope aceito na fila de entrada:
+Todas FIFO, todas provisionadas pelo próprio serviço de forma idempotente (D-041), em dois momentos: as duas de entrada no boot do consumidor — a DLQ primeiro, porque a redrive policy da origem carrega o ARN dela —, e a de saída na primeira publicação da outbox. Envelope aceito na fila de entrada:
 
 ```json
 {
