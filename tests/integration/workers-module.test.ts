@@ -96,6 +96,28 @@ async function publicadaEm(id: string): Promise<Date | undefined> {
  */
 const INTERVALO_MS = 100;
 
+/**
+ * Prazo do caso que espera a publicação, folgado sobre os 15 s de `aguardar`.
+ *
+ * O default do `bun test` é 5 s — **abaixo** do prazo que este caso pede. Sem
+ * este argumento o runner mataria o teste antes de `aguardar` chegar a lançar,
+ * e a falha viria como "this test timed out after 5000ms" em vez de dizer o que
+ * não aconteceu. O prazo do caso precisa ser folgado em relação ao prazo da
+ * espera; o contrário torna o prazo da espera decorativo.
+ */
+const PRAZO_DO_CASO_MS = 60_000;
+
+/**
+ * Prazo do `beforeAll`. Os hooks do `bun test` caem no **mesmo** default de 5 s.
+ *
+ * Este hook derruba e reaplica o schema inteiro e sobe a aplicação, e o
+ * `app.init()` provisiona a fila de entrada e a DLQ pela rede (D-041): num
+ * LocalStack frio isso passa de 5 s com folga, e o arquivo inteiro falharia por
+ * timeout de hook, sem apontar nem o banco nem a fila. Mesmo valor do hook
+ * equivalente em `recovery-after-restart.test.ts`.
+ */
+const PRAZO_DO_HOOK_MS = 180_000;
+
 /** Valor original de `CONSUMER_WAIT_TIME_SEC`, restaurado ao fim. */
 const esperaOriginal = process.env.CONSUMER_WAIT_TIME_SEC;
 
@@ -117,7 +139,7 @@ beforeAll(async () => {
   // `init()` dispara `onApplicationBootstrap`, que é onde os laços começam.
   // Sem `listen()`: o que esta suíte observa são os workers, não as rotas.
   await app.init();
-});
+}, PRAZO_DO_HOOK_MS);
 
 afterAll(async () => {
   await orm.close(true);
@@ -144,7 +166,7 @@ describe("WorkersModule (D-063)", () => {
       "a linha da outbox ser publicada pelo laço do WorkersModule",
       INTERVALO_MS,
     );
-  });
+  }, PRAZO_DO_CASO_MS);
 
   it("encerra os três laços no shutdown da aplicação (RF-22)", async () => {
     // `close()` **aguarda** o ciclo em andamento de cada laço: é o requisito, não
