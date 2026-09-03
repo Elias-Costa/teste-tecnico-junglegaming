@@ -31,13 +31,16 @@ export interface ReconciliationReport {
  *
  * **Não corrige nada, em hipótese alguma.** Uma correção silenciosa apagaria a
  * única evidência de que a invariante foi violada, e é justamente a divergência
- * que precisa chegar a um humano — o enunciado é explícito. O que este use case
- * faz é medir, sinalizar e avisar.
+ * que precisa chegar a um humano — o enunciado é explícito. Aqui isso não é
+ * disciplina de quem escreve: `runSnapshot` abre a transação em `read only`, e
+ * uma escrita neste caminho morre no `25006` do PostgreSQL (D-065).
  *
- * Lê sob o lock da wallet (D-057). Em READ COMMITTED, ler o saldo e depois o
- * ledger sem lock veria dois instantes diferentes, e uma aposta confirmada entre
- * as duas leituras produziria uma divergência que nunca existiu — alarme falso
- * num sinal que RF-16 manda logar e contabilizar.
+ * Lê sob **snapshot**, não sob lock. Em READ COMMITTED, ler o saldo e depois o
+ * ledger veria dois instantes diferentes, e uma aposta confirmada entre as duas
+ * leituras produziria uma divergência que nunca existiu — alarme falso num sinal
+ * que RF-16 manda logar e contabilizar. `REPEATABLE READ` resolve isso sem
+ * bloquear ninguém: a auditoria de uma wallet com ledger longo **não** segura as
+ * apostas dela, que era o custo aceito por D-057 e que D-065 removeu.
  */
 export class ReconcileWallet {
   /**
@@ -55,11 +58,11 @@ export class ReconcileWallet {
    * @throws ResourceNotFoundError se a wallet não existe (D-056 → 404).
    */
   async execute(walletId: string): Promise<ReconciliationReport> {
-    const report = await this.unitOfWork.run(async (repos) => {
-      // Sob lock (D-057): o mesmo `findByIdForUpdate` de D-002, que RI-06 exige
-      // ser o ponto único de aquisição. A reconciliação espera a movimentação em
-      // voo terminar em vez de correr contra ela.
-      const wallet = await repos.wallets.findByIdForUpdate(walletId);
+    const report = await this.unitOfWork.runSnapshot(async (repos) => {
+      // Leitura simples (D-065): quem congela o instante é o snapshot da
+      // transação, não um lock. `findByIdForUpdate` fica reservado ao caminho do
+      // dinheiro, que é o que mantém RI-06 com um ponto único de aquisição.
+      const wallet = await repos.wallets.findById(walletId);
 
       if (wallet === undefined) {
         throw new ResourceNotFoundError("wallet", walletId);

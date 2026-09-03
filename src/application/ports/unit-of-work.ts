@@ -21,6 +21,17 @@ export interface TransactionalRepositories {
 }
 
 /**
+ * O que uma leitura sob snapshot pode tocar (D-065).
+ *
+ * Subconjunto deliberado: quem reconcilia precisa da wallet e do ledger, e de
+ * mais nada. Inbox e outbox ficam **fora da assinatura** porque escrever nelas
+ * ali é impossível — a transação é `read only` e o PostgreSQL recusaria com
+ * `25006`. Recortar o tipo faz a restrição aparecer no compilador antes de
+ * aparecer no banco.
+ */
+export type ReadOnlyRepositories = Pick<TransactionalRepositories, "wallets" | "ledger">;
+
+/**
  * Abre uma transação SQL e entrega os repositórios que valem dentro dela (RF-23).
  *
  * Porta de **aplicação**, não de domínio: ao contrário dos repositórios de
@@ -39,4 +50,23 @@ export interface UnitOfWork {
    * para uma movimentação que não aconteceu (RI-04, EL-06).
    */
   run<T>(work: (repositories: TransactionalRepositories) => Promise<T>): Promise<T>;
+
+  /**
+   * Executa `work` sobre um **instante congelado** do banco, sem escrever (D-065).
+   *
+   * Existe para a reconciliação de RF-16, que compara o saldo materializado com a
+   * soma do ledger: em READ COMMITTED as duas leituras veem snapshots diferentes,
+   * e uma aposta confirmada entre elas acusaria divergência que nunca existiu —
+   * num sinal que o requisito manda logar e contabilizar.
+   *
+   * A implementação abre a transação em `REPEATABLE READ` **e** `read only`. O
+   * segundo é o ponto: RF-16 exige que divergência não seja corrigida em
+   * silêncio, e sob `read only` isso deixa de ser promessa do código e vira
+   * recusa do banco. É também o que separa este método de `run` — não é "uma
+   * transação com outro isolamento", é um caminho de onde não sai escrita.
+   *
+   * Não substitui `run` em consulta de leitura única: um `SELECT` só não tem dois
+   * instantes para conciliar, e pagaria isolamento sem comprar nada.
+   */
+  runSnapshot<T>(work: (repositories: ReadOnlyRepositories) => Promise<T>): Promise<T>;
 }

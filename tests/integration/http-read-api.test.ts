@@ -34,7 +34,7 @@ import { walletRowSchema } from "../../src/infrastructure/persistence/rows/walle
 import { AppModule } from "../../src/interface/http/app.module.ts";
 import { CORRELATION_HEADER } from "../../src/interface/http/correlation.ts";
 import { IDEMPOTENCY_KEY_HEADER } from "../../src/interface/http/dto/parse-submit-transaction-request.ts";
-import { expectLedgerReconciles } from "../support/concurrency-harness.ts";
+import { comPrazo, expectLedgerReconciles } from "../support/concurrency-harness.ts";
 
 let orm: MikroORM;
 let app: INestApplication;
@@ -59,6 +59,22 @@ function comoObjeto(valor: unknown): Record<string, unknown> {
   }
 
   return { ...valor };
+}
+
+/**
+ * SQLSTATE do erro que o driver propagou, ou `undefined` se não houver.
+ *
+ * O `DriverException` do MikroORM copia as propriedades próprias do erro
+ * original ao envolvê-lo, então o `code` do `pg` sobrevive à conversão — o mesmo
+ * fato que sustenta D-035 e D-037. Devolver `undefined` em vez de lançar mantém
+ * a asserção legível: a falha aparece como "esperava 25006, veio undefined".
+ */
+function sqlStateDe(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return undefined;
+  }
+
+  return typeof error.code === "string" ? error.code : undefined;
 }
 
 /** Garante que o valor é uma lista de objetos JSON — a `entries` da página. */
@@ -492,5 +508,82 @@ describe("POST /wallets/:walletId/reconciliation (RF-16, §6.4)", () => {
   it("wallet inexistente é 404 e id malformado é 400", async () => {
     expect((await postar(`/wallets/${idInexistente()}/reconciliation`)).status).toBe(404);
     expect((await postar("/wallets/nao-e-uuid/reconciliation")).status).toBe(400);
+  });
+
+  it("responde enquanto outra transação segura o lock da wallet (D-065)", async () => {
+    const walletId = await abrirWallet("100.00");
+
+    expect((await submeter(walletId)).status).toBe(200);
+
+    // O lock é adquirido pelo **mesmo** `findByIdForUpdate` do caminho do
+    // dinheiro (D-002) e segurado até `liberar` ser chamado: é a aposta em voo
+    // que a reconciliação, sob D-057, tinha de esperar terminar.
+    let liberar: (() => void) | undefined;
+    const solto = new Promise<void>((resolve) => {
+      liberar = resolve;
+    });
+
+    // O segundo sinal não é cerimônia: sem esperar o lock **estar tomado**, a
+    // reconciliação poderia chegar antes dele e o teste passaria por corrida, sem
+    // provar nada.
+    let avisarQueTomou: (() => void) | undefined;
+    const lockTomado = new Promise<void>((resolve) => {
+      avisarQueTomou = resolve;
+    });
+
+    const segurandoOLock = new MikroUnitOfWork(orm.em).run(async (repos) => {
+      await repos.wallets.findByIdForUpdate(walletId);
+      avisarQueTomou?.();
+      await solto;
+    });
+
+    try {
+      await comPrazo(lockTomado, 5_000, "aquisição do lock pela transação concorrente");
+
+      // **Esta é a prova comportamental de D-065.** Sob D-057 o prazo estouraria:
+      // a resposta só viria depois de `liberar()`. Cinco segundos é folga larga
+      // para uma leitura que não espera por lock nenhum.
+      const resposta = await comPrazo(
+        postar(`/wallets/${walletId}/reconciliation`),
+        5_000,
+        "reconciliação com o lock da wallet tomado por outra transação",
+      );
+
+      expect(resposta.status).toBe(200);
+      expect(resposta.corpo["consistent"]).toBe(true);
+    } finally {
+      liberar?.();
+      await segurandoOLock;
+    }
+  });
+
+  it("o snapshot recusa escrita — RF-16 imposta pelo banco (D-065)", async () => {
+    const walletId = await abrirWallet("100.00");
+
+    let capturado: unknown;
+    let lancou = false;
+
+    try {
+      await new MikroUnitOfWork(orm.em).runSnapshot(async (repos) => {
+        const wallet = await repos.wallets.findById(walletId);
+
+        if (wallet === undefined) {
+          throw new Error("a wallet semeada não foi encontrada dentro do snapshot");
+        }
+
+        // A "correção silenciosa" que RF-16 proíbe, tentada de propósito. O que
+        // se prova aqui não é o conteúdo do `UPDATE` — é que **o caminho** não
+        // escreve: sob `read only`, qualquer escrita morre antes de existir.
+        await repos.wallets.update(wallet);
+      });
+    } catch (error) {
+      lancou = true;
+      capturado = error;
+    }
+
+    expect(lancou).toBe(true);
+    // `25006` = `read_only_sql_transaction`. Sob D-057 este `UPDATE` teria
+    // passado, e a garantia de RF-16 seria só disciplina de quem escreve código.
+    expect(sqlStateDe(capturado)).toBe("25006");
   });
 });

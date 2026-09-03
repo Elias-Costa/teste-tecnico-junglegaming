@@ -1,5 +1,7 @@
+import { IsolationLevel } from "@mikro-orm/core";
 import type { EntityManager } from "@mikro-orm/postgresql";
 import type {
+  ReadOnlyRepositories,
   TransactionalRepositories,
   UnitOfWork,
 } from "../../application/ports/unit-of-work.ts";
@@ -34,6 +36,29 @@ export class MikroUnitOfWork implements UnitOfWork {
         inbox: new MikroInboxRepository(tx),
         outbox: new MikroOutboxRepository(tx),
       }),
+    );
+  }
+
+  /**
+   * Transação de leitura em `REPEATABLE READ` e `read only` (D-065).
+   *
+   * As duas opções são passadas ao mesmo `em.transactional`, e o driver as
+   * traduz em `set transaction isolation level repeatable read` e no modo de
+   * acesso `read only` da conexão — conferido no `@mikro-orm/sql` instalado, não
+   * escrito de memória (`AGENTS.md` §2.1).
+   *
+   * Só os dois repositórios de `ReadOnlyRepositories` são construídos. Não é
+   * economia: instanciar inbox e outbox aqui ofereceria a quem lê um caminho de
+   * escrita que só falharia em tempo de execução, no meio de um relatório.
+   */
+  async runSnapshot<T>(work: (repositories: ReadOnlyRepositories) => Promise<T>): Promise<T> {
+    return this.em.transactional(
+      async (tx) =>
+        work({
+          wallets: new MikroWalletRepository(tx),
+          ledger: new MikroWalletLedgerRepository(tx),
+        }),
+      { isolationLevel: IsolationLevel.REPEATABLE_READ, readOnly: true },
     );
   }
 }
