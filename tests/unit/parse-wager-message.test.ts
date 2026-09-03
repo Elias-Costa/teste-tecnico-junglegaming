@@ -120,6 +120,17 @@ describe("parseWagerMessage — envelope da §10 vira o comando de RF-18", () =>
     expect(erro).toBeInstanceOf(InvalidPayloadError);
   });
 
+  it("`walletId` sem forma de UUID morre na borda, e não numa transação abortada (D-014)", () => {
+    // Mesma guarda da borda HTTP, com um ganho próprio da fila: recusado aqui, o
+    // destino continua sendo a DLQ (D-046) sem gastar a transação que o `22P02`
+    // do PostgreSQL abortaria depois de já ter aberto conexão e travado a wallet.
+    const erro = erroDe(() =>
+      parseWagerMessage(envelope({ data: dados({ walletId: "wallet-1" }) })),
+    );
+
+    expect(erro).toBeInstanceOf(InvalidPayloadError);
+  });
+
   it("`null` explícito é recusado, e não tratado como ausente (D-005)", () => {
     // Aceitar `null` como sinônimo de ausente daria dois hashes possíveis para a
     // mesma operação, e o segundo reenvio viraria `IDEMPOTENCY_CONFLICT` falso.

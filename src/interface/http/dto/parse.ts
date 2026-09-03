@@ -161,6 +161,9 @@ export function requiredHeader(
  *
  * `400` e não `404`: a diferença é entre "não existe" e "isso nem é um id".
  *
+ * A rota não é a única porta por onde um id interno entra: `requiredUuid`, logo
+ * abaixo, é a irmã que faz a mesma checagem sobre campo de **corpo**.
+ *
  * @param what nome do parâmetro na mensagem, como o cliente o vê na rota.
  * @throws InvalidPayloadError se o valor não tiver forma de UUID.
  */
@@ -170,4 +173,33 @@ export function uuidParam(value: string, what: string): string {
   }
 
   return value;
+}
+
+/**
+ * Lê um campo de corpo que carrega um id interno deste sistema (D-014, D-056).
+ *
+ * O caso é `walletId`, o **único** campo de corpo que vira comparação com uma
+ * coluna `uuid`: os demais identificadores da submissão são do provedor e vivem
+ * em `varchar`. Sem esta checagem ele repetiria pelo corpo exatamente o `22P02`
+ * que `uuidParam` impede pela rota — `500` para o que RF-15 (a) define como
+ * payload malformado.
+ *
+ * Composta das duas primitivas que já existem, e não reescrita: `requiredString`
+ * responde pela presença, pelo `null` de D-005 e pelo comprimento; `uuidParam`
+ * responde pela forma. Uma terceira cópia da regex ou da mensagem seria mais uma
+ * coisa a divergir no dia em que D-014 mudar de ideia sobre o formato do id.
+ *
+ * **Não confundir com existência.** Um UUID bem formado e inexistente segue
+ * adiante e é `422 WALLET_NOT_FOUND` na wallet travada (D-031) — a distinção
+ * entre "não existe" e "isso nem é um id" é a mesma de `uuidParam`.
+ *
+ * @param label nome usado na mensagem, quando difere da chave.
+ * @throws InvalidPayloadError se estiver ausente, malformado ou sem forma de UUID.
+ */
+export function requiredUuid(
+  source: Record<string, unknown>,
+  key: string,
+  label: string = key,
+): string {
+  return uuidParam(requiredString(source, key, label), label);
 }

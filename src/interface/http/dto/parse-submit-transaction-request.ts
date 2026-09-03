@@ -2,7 +2,14 @@ import type { ProcessWagerTransactionCommand } from "../../../application/proces
 import { WagerTransactionKind } from "../../../domain/wager-transaction.ts";
 import { InvalidPayloadError } from "../errors/invalid-payload-error.ts";
 import { KindNotSubmittableError } from "../../../application/errors/kind-not-submittable-error.ts";
-import { asObject, optionalString, requiredHeader, requiredMoney, requiredString } from "./parse.ts";
+import {
+  asObject,
+  optionalString,
+  requiredHeader,
+  requiredMoney,
+  requiredString,
+  requiredUuid,
+} from "./parse.ts";
 
 /** Header que carrega a fonte da verdade da idempotência (RF-13, RF-14). */
 export const IDEMPOTENCY_KEY_HEADER = "idempotency-key";
@@ -44,7 +51,11 @@ export function parseSubmitTransactionRequest(
     providerId: requiredString(source, "providerId"),
     externalTransactionId: requiredString(source, "externalTransactionId"),
     playerId: requiredString(source, "playerId"),
-    walletId: requiredString(source, "walletId"),
+    // `requiredUuid`, e não `requiredString`: é o id **interno** da wallet, e a
+    // coluna do outro lado é `uuid` (D-014). Sem a checagem de forma aqui, um
+    // `walletId` malformado só morreria no `22P02` do PostgreSQL, que D-037 não
+    // mapeia — `500` para o que RF-15 (a) define como payload inválido.
+    walletId: requiredUuid(source, "walletId"),
     roundId: requiredString(source, "roundId"),
     gameId: requiredString(source, "gameId"),
     kind: parseSubmittableKind(source),

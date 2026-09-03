@@ -25,13 +25,23 @@ import { KindNotSubmittableError } from "../../src/application/errors/kind-not-s
 
 const CORRELACAO = "0199a1f0-0000-7000-8000-000000000000";
 
+/**
+ * O `walletId` do exemplo da §9 do enunciado.
+ *
+ * Literal e não gerado: `walletId` é id **interno** (D-014) e a borda passou a
+ * checar a forma, então a fixture precisa ser um UUID de verdade — e usar o do
+ * enunciado deixa visível que o formato é o que ele escreve, não o que o teste
+ * inventou.
+ */
+const WALLET_ID = "0192f291-27dd-7d3f-8071-5f8685deef37";
+
 /** Corpo válido de submissão, para os testes mudarem um campo por vez. */
 function corpoDeAposta(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     providerId: "provider-a",
     externalTransactionId: "transaction-123",
     playerId: "player-1",
-    walletId: "wallet-1",
+    walletId: WALLET_ID,
     roundId: "round-987",
     gameId: "fortune-chimp",
     kind: "BET",
@@ -94,6 +104,22 @@ describe("POST /wagering/transactions: payload inválido é 400 (D-038)", () => 
   it("recusa campo obrigatório ausente e campo em branco", () => {
     expect(() => submeter(corpoDeAposta({ playerId: undefined }))).toThrow(InvalidPayloadError);
     expect(() => submeter(corpoDeAposta({ playerId: "   " }))).toThrow(InvalidPayloadError);
+  });
+
+  it("recusa walletId sem forma de UUID, em vez de deixá-lo virar 22P02 no banco (D-014)", () => {
+    // `walletId` é o **único** campo de corpo que vira comparação com coluna
+    // `uuid`. Sem esta guarda ele chegaria ao `findByIdForUpdate` e o PostgreSQL
+    // responderia `22P02`, que D-037 não mapeia — `500` para o que RF-15 (a)
+    // define como payload inválido. É a mesma checagem que a rota já fazia.
+    expect(() => submeter(corpoDeAposta({ walletId: "wallet-1" }))).toThrow(InvalidPayloadError);
+    expect(() => submeter(corpoDeAposta({ walletId: "wallet-1" }))).toThrow(/UUID/);
+
+    // Bem formado passa **mesmo sem existir**: quem responde por existência é o
+    // use case, com `422 WALLET_NOT_FOUND` na wallet travada (D-031). A borda
+    // separa "isso nem é um id" de "esse id não existe", como `uuidParam`.
+    const inexistente = Bun.randomUUIDv7();
+
+    expect(submeter(corpoDeAposta({ walletId: inexistente })).walletId).toBe(inexistente);
   });
 
   it("recusa corpo que não é objeto JSON, array incluído", () => {

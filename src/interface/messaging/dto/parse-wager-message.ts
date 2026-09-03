@@ -1,7 +1,13 @@
 import type { ProcessWagerTransactionCommand } from "../../../application/process-wager-transaction.ts";
 import { InvalidPayloadError } from "../../http/errors/invalid-payload-error.ts";
 import { parseSubmittableKind } from "../../http/dto/parse-submit-transaction-request.ts";
-import { asObject, optionalString, requiredMoney, requiredString } from "../../http/dto/parse.ts";
+import {
+  asObject,
+  optionalString,
+  requiredMoney,
+  requiredString,
+  requiredUuid,
+} from "../../http/dto/parse.ts";
 
 /** Tipo de mensagem que a fila de entrada aceita (§10 do enunciado). */
 const WAGER_TRANSACTION_REQUESTED = "WagerTransactionRequested";
@@ -63,7 +69,11 @@ export function parseWagerMessage(body: unknown): ParsedWagerMessage {
       providerId: requiredString(data, "providerId"),
       externalTransactionId: requiredString(data, "externalTransactionId"),
       playerId: requiredString(data, "playerId"),
-      walletId: requiredString(data, "walletId"),
+      // Mesma primitiva da borda HTTP, pelo mesmo motivo e com um ganho a mais:
+      // pela fila, um `walletId` malformado que chegasse ao banco gastaria uma
+      // transação abortada antes de ir à DLQ. Recusado aqui, o destino é o mesmo
+      // (D-046) sem custar escrita nenhuma.
+      walletId: requiredUuid(data, "walletId"),
       roundId: requiredString(data, "roundId"),
       gameId: requiredString(data, "gameId"),
       // Mesma função do parser HTTP: RN-13 barra `OPENING` "nem pela API nem
