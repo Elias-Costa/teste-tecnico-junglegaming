@@ -293,6 +293,40 @@ export async function comPrazo<T>(promessa: Promise<T>, ms: number, oQue: string
 }
 
 /**
+ * Espera uma condição **observada** virar verdadeira, dentro de um prazo.
+ *
+ * A condição olha estado real — linha no banco, atributo da fila —, nunca um
+ * relógio: `sleep` calibrado passa na máquina rápida e falha na lenta, e é o
+ * defeito que E-09 aprendeu a procurar. O prazo existe para que uma condição que
+ * nunca acontece vire mensagem legível em vez de trava até o timeout genérico da
+ * suíte.
+ *
+ * Mora aqui, e não em cada arquivo, pela mesma razão que promoveu `lerLinha` e
+ * `comPrazo` em E-10: os três cenários de recuperação de E-16 esperam por estado
+ * observado, e três cópias de uma espera são três formas de esperar.
+ *
+ * @throws Error se a condição não se realizar dentro do prazo.
+ */
+export async function aguardar(
+  condicao: () => Promise<boolean>,
+  prazoMs: number,
+  oQue: string,
+  intervaloMs = 25,
+): Promise<void> {
+  const limite = Date.now() + prazoMs;
+
+  while (Date.now() < limite) {
+    if (await condicao()) {
+      return;
+    }
+
+    await Bun.sleep(intervaloMs);
+  }
+
+  throw new Error(`${oQue} não aconteceu em ${String(prazoMs)}ms.`);
+}
+
+/**
  * Barreira de N participantes, com prazo que **rejeita** em vez de travar.
  *
  * Usada por RT-16 para provar a ausência de lock global (RI-06, RNF-01): se as N
