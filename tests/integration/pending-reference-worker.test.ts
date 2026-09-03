@@ -57,7 +57,7 @@ import { outboxMessageRowSchema } from "../../src/infrastructure/persistence/row
 import type { WagerTransactionRow } from "../../src/infrastructure/persistence/rows/wager-transaction-row.ts";
 import { wagerTransactionRowSchema } from "../../src/infrastructure/persistence/rows/wager-transaction-row.ts";
 import { walletLedgerEntryRowSchema } from "../../src/infrastructure/persistence/rows/wallet-ledger-entry-row.ts";
-import { expectLedgerReconciles } from "../support/concurrency-harness.ts";
+import { aguardar, expectLedgerReconciles } from "../support/concurrency-harness.ts";
 
 let orm: MikroORM;
 
@@ -145,6 +145,54 @@ function cenario(ttlMs = TTL_MS): Cenario {
   });
 
   return { relogio, useCase, store, worker, erros };
+}
+
+/**
+ * Worker cuja **varredura** vê o banco vivo e cuja **resolução** morre de verdade.
+ *
+ * A falha é injetada como em RT-11 (`outbox-publisher.test.ts`): indisponibilidade
+ * real, não substituto (EL-08). O `PendingReferenceStore` continua sobre o
+ * PostgreSQL da suíte — é ele que devolve as pendentes devidas —, e o que aponta
+ * para a porta 1 é um **MikroORM de produção**, montado com o mesmo
+ * `buildOrmConfig()`, que o `ProcessWagerTransaction` usa como `UnitOfWork`.
+ * Sondado antes de escrever este teste: em 7.1.14 `MikroORM.init` **não** conecta
+ * (a conexão é preguiçosa, como D-001 já registrava), e a primeira query falha em
+ * ~24 ms com `DriverException` carregando `code: ECONNREFUSED` — que é o mesmo
+ * erro transitório que RNF-05 manda o laço sobreviver.
+ *
+ * `pollIntervalMs` alto de propósito: a espera entre ciclos precisa ser longa o
+ * bastante para que "houve um ciclo" e "houve muitos" sejam contagens
+ * inconfundíveis, e `stop()` a interrompe na hora pelo despertar do worker.
+ */
+async function workerComBancoMorto(): Promise<{
+  worker: PendingReferenceWorker;
+  erros: unknown[];
+  fechar: () => Promise<void>;
+}> {
+  const morto = await MikroORM.init({
+    ...buildOrmConfig(),
+    clientUrl: "postgresql://wagering:wagering@127.0.0.1:1/wagering",
+  });
+
+  const erros: unknown[] = [];
+  // Um relógio só para os dois, como em `cenario()`: worker e use case descrevem
+  // o mesmo instante, e dois relógios aqui seriam divergência sem propósito.
+  const relogio = new RelogioAjustavel(INICIO);
+
+  const worker = new PendingReferenceWorker(
+    new PendingReferenceStore(orm.em),
+    new ProcessWagerTransaction(new MikroUnitOfWork(morto.em), relogio, ids),
+    relogio,
+    CURVA_CURTA,
+    {
+      batchSize: 10,
+      ttlMs: TTL_MS,
+      pollIntervalMs: 30_000,
+      onCycleError: (erro) => erros.push(erro),
+    },
+  );
+
+  return { worker, erros, fechar: () => morto.close(true) };
 }
 
 /** Wallet aberta com saldo, `OPENING` aplicada e lançamento de abertura (RF-08). */
@@ -745,4 +793,55 @@ describe("EL-03 — a mesma pendente não é resolvida duas vezes", () => {
     // resolver", e não um erro que o laço teria de classificar.
     expect(await useCase.resolvePendingReference(novoId(), INICIO)).toBeUndefined();
   });
+});
+
+describe("RNF-05 — ciclo que não avança espera, em vez de revarrer sem pausa", () => {
+  it("um lote em que tudo falha custa um ciclo, não um laço quente", async () => {
+    const { useCase } = cenario();
+    const wallet = await semearWallet("100.00");
+
+    // Uma pendente devida: nasce com `next_reference_attempt_at` nulo (D-052), e
+    // como a falha **não** reagenda, ela continua devida a cada nova varredura —
+    // que é exatamente a condição em que o laço giraria sem pausa.
+    await useCase.execute(
+      comando(wallet, {
+        kind: WagerTransactionKind.Rollback,
+        referenceExternalTransactionId: unico("ext-ausente"),
+      }),
+    );
+
+    const { worker, erros, fechar } = await workerComBancoMorto();
+
+    try {
+      // A varredura acha (banco vivo) e a resolução morre (banco morto): é o
+      // `scanned === failed` que a correção passou a ler como "não avançou".
+      expect(await worker.runOnce()).toEqual({
+        scanned: 1,
+        resolved: 0,
+        rejected: 0,
+        rescheduled: 0,
+        failed: 1,
+      });
+
+      worker.start();
+
+      await aguardar(
+        () => Promise.resolve(erros.length > 1),
+        5_000,
+        "o primeiro ciclo do laço falhar",
+      );
+
+      // Meio segundo é uma eternidade para este laço: a resolução morre em ~2 ms
+      // contra um endereço que recusa conexão. Sem a correção, o ciclo seguinte
+      // começaria na hora e o contador estaria nas centenas; com ela, o laço
+      // dorme o `pollIntervalMs` de 30 s e o único erro é o do primeiro ciclo.
+      await Bun.sleep(500);
+      await worker.stop();
+
+      expect(erros).toHaveLength(2);
+    } finally {
+      await worker.stop();
+      await fechar();
+    }
+  }, 30_000);
 });

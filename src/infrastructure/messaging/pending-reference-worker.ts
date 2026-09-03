@@ -195,11 +195,11 @@ export class PendingReferenceWorker {
   /**
    * O laço em si.
    *
-   * Só espera quando o ciclo veio vazio: com muitas pendentes devidas, o worker
-   * encadeia lotes sem latência artificial. Um erro de ciclo — banco indisponível,
-   * tipicamente — não derruba o laço; ele espera o intervalo e tenta de novo, que
-   * é o comportamento que RNF-05 cobra diante de infraestrutura momentaneamente
-   * fora.
+   * Só espera quando o ciclo **não avançou**: com muitas pendentes devidas e
+   * resoluções acontecendo, o worker encadeia lotes sem latência artificial. Um
+   * erro de ciclo — banco indisponível, tipicamente — não derruba o laço; ele
+   * espera o intervalo e tenta de novo, que é o comportamento que RNF-05 cobra
+   * diante de infraestrutura momentaneamente fora.
    */
   private async run(): Promise<void> {
     while (this.isRunning()) {
@@ -207,7 +207,19 @@ export class PendingReferenceWorker {
 
       try {
         const result = await this.runOnce();
-        idle = result.scanned === 0;
+
+        // **"Não avançou" é mais que "não achou nada".** Uma tentativa que morre
+        // em exceção não reagenda a pendente, de propósito (ver `runOnce`), então
+        // a varredura seguinte devolve exatamente as mesmas linhas. Um lote em que
+        // todas falharam — deadlock no `FOR UPDATE`, `statement_timeout` — sem esta
+        // segunda condição faria o laço revarrer sem pausa nenhuma, martelando um
+        // PostgreSQL que já está falhando; o oposto do que RNF-05 pede.
+        //
+        // As duas metades ficam escritas: `failed === scanned` cobriria o lote
+        // vazio por `0 === 0`, mas escondendo o caso comum atrás de uma
+        // coincidência aritmética. O `OutboxPublisher` não precisa do par porque
+        // lá toda falha grava o backoff antes do próximo claim (D-022).
+        idle = result.scanned === 0 || result.failed === result.scanned;
       } catch (error) {
         this.options.onCycleError?.(error);
       }
