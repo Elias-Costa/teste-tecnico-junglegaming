@@ -2,7 +2,7 @@
 
 Decisões, trade-offs e limitações conhecidas do **Distributed Wagering Processor**.
 
-Este documento é uma **curadoria** de [`docs/decisions.md`](docs/decisions.md), onde as 63 decisões estão registradas por extenso, cada uma com o contexto que a motivou e as alternativas descartadas. Aqui está o que sustenta o desenho e o que ele custa. Toda seção aponta para o `D-XXX` correspondente.
+Este documento é uma **curadoria** de [`docs/decisions.md`](docs/decisions.md), onde as 64 decisões estão registradas por extenso, cada uma com o contexto que a motivou e as alternativas descartadas. Aqui está o que sustenta o desenho e o que ele custa. Toda seção aponta para o `D-XXX` correspondente.
 
 Duas regras governaram o projeto inteiro, e valem como chave de leitura:
 
@@ -255,10 +255,18 @@ O código sozinho basta para o provedor decidir. A **ação esperada** é docume
 | `IDEMPOTENCY_CONFLICT` | mesma key, payload diferente | corrigir payload |
 | `WALLET_NOT_FOUND` | wallet inexistente | corrigir payload |
 | `KIND_NOT_SUBMITTABLE` | `OPENING` submetido externamente | corrigir payload |
-| `PERMANENT_INFRASTRUCTURE_ERROR` | erro permanente identificado no processamento | escalar — não é problema de payload |
-| `MAX_RETRIES_EXHAUSTED` | mensagem esgotou tentativas e foi à DLQ | escalar; reenvio é seguro, mas exige diagnóstico |
+| `PERMANENT_INFRASTRUCTURE_ERROR` † | erro permanente identificado no processamento | escalar — não é problema de payload |
+| `MAX_RETRIES_EXHAUSTED` † | mensagem esgotou tentativas e foi à DLQ | escalar; reenvio é seguro, mas exige diagnóstico |
 
-> **Uma propriedade que cai de graça do desenho:** reenviar depois de `MAX_RETRIES_EXHAUSTED` **não duplica efeito**. Ou o commit nunca aconteceu — e nada foi aplicado — ou aconteceu e o `ack` falhou, caso em que a inbox deduplica na redelivery. Exigir diagnóstico antes do reenvio é orientação operacional, não requisito de segurança.
+† **Os dois códigos de infraestrutura não têm emissor hoje, e nenhuma transação chega ao status `FAILED`** (D-047, D-064). Não é esquecimento, e a razão tem duas metades.
+
+A primeira é D-047: uma falha permanente no consumo faz **rollback da transação inteira** — E-07 insere a `WagerTransaction` já no estado terminal, então não sobra linha onde marcar `FAILED` —, e gravá-la numa segunda transação ocuparia a `idempotencyKey` da operação, fazendo o reenvio legítimo, depois de o defeito corrigido, responder replay de uma falha em vez de processar.
+
+A segunda é o enunciado. D-047 previu que o emissor apareceria no worker de referências pendentes, ao esgotar o TTL; não apareceu, e não deve aparecer: a **§7.1 do enunciado** escreve, como critério de aceite, que o esgotamento do limite produz `REJECTED` com um `failureCode` que identifique a referência inexistente. D-007 já concordava por outro caminho, ao classificar `REFERENCE_NOT_FOUND` entre os 11 códigos de negócio — a referência que não chega em 15 minutos é desfecho da cadeia do provedor, não falha de infraestrutura nossa. D-064 registra a escolha e emenda a previsão de D-047.
+
+O enum continua fechado em 13; dois deles estão **reservados**, e o compilador segue impedindo que um código de infraestrutura entre em `reject()`. Ver a limitação correspondente na §6.
+
+> **Uma propriedade que cai de graça do desenho:** reenviar depois de `MAX_RETRIES_EXHAUSTED` **não duplica efeito**. Ou o commit nunca aconteceu — e nada foi aplicado — ou aconteceu e o `ack` falhou, caso em que a inbox deduplica na redelivery. Exigir diagnóstico antes do reenvio é orientação operacional, não requisito de segurança. Vale como propriedade do desenho mesmo com o código reservado: ela descreve o que acontece quando a mensagem volta, não o que a tabela de transações registra.
 
 **Cursor keyset por UUIDv7 (D-014).**
 Os ids de exemplo do próprio enunciado já são UUIDv7. Como o v7 é ordenável no tempo por construção, um índice de **coluna única** entrega ordem cronológica e ordem total ao mesmo tempo. O par `(created_at, id)` daria o mesmo resultado com índice composto, cursor maior e duas partes para validar — complexidade sem ganho. O cursor é base64url do id, opaco: o cliente repassa o `nextCursor` e nunca o constrói.
@@ -355,6 +363,7 @@ Cortes e trade-offs assumidos conscientemente. Um corte documentado é engenhari
 
 - **Entrega é at-least-once, por desenho.** Crash entre o publish e a marcação de `published_at` republica. O enunciado assume isso, e o consumidor é idempotente pela inbox — mas quem consumir `wagering-events.fifo` precisa saber disso.
 - **A outbox nunca desiste de um evento (D-042).** Uma falha *permanente* de publicação — fila apagada, credencial revogada — faz a linha ser reivindicada indefinidamente, com o backoff saturado em `OUTBOX_MAX_DELAY_MS`. É deliberado: desistir quebraria a invariante de que toda transação aplicada tem evento. O sinal operacional é `attempts` passando de `OUTBOX_MAX_ATTEMPTS` mais `outbox_lag_seconds` subindo, e não um alerta próprio.
+- **Uma mensagem que vai à DLQ não deixa rastro na tabela de transações (D-047, D-064).** Quem investiga olha a DLQ e o log, não `GET /wagering/transactions/:id`: a falha permanente faz rollback e não sobra linha para marcar. É o motivo de `FAILED` não ter emissor e de os dois códigos de infraestrutura da §4.6 estarem reservados. O preço é uma consulta que responde `404` para uma operação que o provedor efetivamente enviou; a alternativa — gravar a falha numa segunda transação — custaria a `idempotencyKey` da operação e transformaria um incidente recuperável em perda definitiva, que é o pior dos dois.
 - **Duas escritas por mensagem** em vez de uma, em troca de não bloquear conexão durante I/O (D-009).
 - **A ordem cronológica do ledger fica implícita no formato do id** (D-014). Se o padrão de id mudasse, a paginação quebraria em silêncio. Trade-off aceito em troca do índice de coluna única.
 
@@ -431,7 +440,7 @@ Os testes de concorrência sobem **processos de sistema operacional** de verdade
 | Documento | Conteúdo |
 |---|---|
 | [README.md](README.md) | setup do zero, comandos, superfície HTTP e de mensageria |
-| [docs/decisions.md](docs/decisions.md) | as 63 decisões por extenso, com alternativas descartadas |
+| [docs/decisions.md](docs/decisions.md) | as 64 decisões por extenso, com alternativas descartadas |
 | [docs/requirements.md](docs/requirements.md) | requisitos numerados e critérios de aceite |
 | [docs/desafio-original.md](docs/desafio-original.md) | enunciado íntegro — fonte da verdade final |
 | [docs/implementation-plan.md](docs/implementation-plan.md) | roteiro e o que cada etapa deixou para a seguinte |

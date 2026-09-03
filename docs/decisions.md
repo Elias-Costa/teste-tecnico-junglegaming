@@ -24,7 +24,7 @@ Registro leve de decisões, estilo ADR. Neste projeto ele tem **três** funçõe
 
 ## Fila de decisões em aberto
 
-**Fila vazia.** O único item — `D-060`, o nome da métrica de divergência de reconciliação, aberto por E-14 — foi **fechado em 2026-09-03**, antes de E-15 escrever a primeira linha de observabilidade: a métrica é `wallet_reconciliation_checks_total{consistent}` e entrou na tabela de D-010, que segue sendo o contrato de nomenclatura.
+**Fila vazia.** O último item — `D-064`, exposto pela revisão adversarial de E-17 — foi **fechado em 2026-09-03**, sem tocar código de produção: o esgotamento do TTL segue `REJECTED`, porque é o que a §7.1 do enunciado escreve. O item anterior — `D-060`, o nome da métrica de divergência de reconciliação, aberto por E-14 — foi fechado no mesmo dia, antes de E-15 escrever a primeira linha de observabilidade: a métrica é `wallet_reconciliation_checks_total{consistent}` e entrou na tabela de D-010, que segue sendo o contrato de nomenclatura.
 
 E-15 expôs mais três decisões ao ser detalhada, todas fechadas na mesma conversa e antes do código: **D-061** (como o log estruturado de RNF-06 é implementado), **D-062** (onde a instrumentação de métricas é ligada, dado que a aplicação e o domínio não podem conhecer `prom-client`) e **D-063** (a etapa passa a subir o processo: `main.ts`, os três workers montados e comando de migration).
 
@@ -32,7 +32,7 @@ O item anterior — o dono de `reference_attempts` e `next_reference_attempt_at`
 
 A fila continuar vazia não significa que ela deixou de valer: toda etapa seguinte que expuser uma decisão não prevista **para** e a registra aqui antes de virar código (`AGENTS.md` §0).
 
-As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito, **D-033** a **D-039**, expostas por E-08 e resolvidas antes de a borda HTTP ser escrita, **D-040** a **D-043**, expostas por E-10 e resolvidas antes de o worker ser escrito, **D-044** a **D-048**, expostas por E-11 e resolvidas antes de o consumidor ser escrito, **D-049** a **D-051**, expostas por E-12 e resolvidas antes de os quatro kinds restantes serem escritos, **D-052** a **D-055**, expostas por E-13 e resolvidas antes de o worker de referências ser escrito, **D-056** a **D-059**, expostas por E-14 e resolvidas antes de as consultas serem escritas, e **D-060** a **D-063**, fechadas antes de a observabilidade de E-15 ser escrita. **Nenhuma etapa está bloqueada.**
+As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito, **D-033** a **D-039**, expostas por E-08 e resolvidas antes de a borda HTTP ser escrita, **D-040** a **D-043**, expostas por E-10 e resolvidas antes de o worker ser escrito, **D-044** a **D-048**, expostas por E-11 e resolvidas antes de o consumidor ser escrito, **D-049** a **D-051**, expostas por E-12 e resolvidas antes de os quatro kinds restantes serem escritos, **D-052** a **D-055**, expostas por E-13 e resolvidas antes de o worker de referências ser escrito, **D-056** a **D-059**, expostas por E-14 e resolvidas antes de as consultas serem escritas, e **D-060** a **D-063**, fechadas antes de a observabilidade de E-15 ser escrita. **D-064** é a única exposta **depois** de o código existir, e não antes: quem a expôs foi a revisão adversarial de E-17, ao encontrar uma decisão registrada que o código não cumpria. Fechou sem tocar produção, porque quem tinha razão era o código. **Nenhuma etapa está bloqueada.**
 
 **E-09 foi a primeira etapa a não expor decisão nenhuma**, e vale registrar por quê: ela não escreveu código de produção. A prova de concorrência é só teste, e a estratégia que ela verifica — pessimistic `FOR UPDATE` por wallet — já estava decidida em **D-002** desde 2026-09-01. A forma de RT-17 (três processos de sistema operacional subindo o `AppModule` inteiro, em vez de três chamadas ao use case no mesmo processo) também não foi escolha: **RI-08** cobra literalmente "correta com múltiplas **instâncias da aplicação**", e EL-05 é "correta somente com uma instância". Uma etapa sem decisão nova é sinal de que as anteriores foram bem fechadas, não de que alguém deixou de perguntar.
 
@@ -1499,3 +1499,33 @@ O custo é uma migration e uma coluna que hoje só o worker relê. É baixo, e a
 - O comando de migration usa o `Migrator` que `orm-config.ts` já registra em `extensions` (E-05) e a mesma `migrationsList` explícita. Nenhuma segunda fonte de verdade de schema.
 - `PORT` entra como variável de ambiente, com `3000` de padrão. É a única variável nova da etapa.
 - `README.md` (E-17) passa a ter o que documentar: subir Compose, aplicar migration, iniciar o processo.
+
+---
+
+## D-064 — `FAILED` fica sem emissor; o TTL segue `REJECTED` (2026-09-03)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta pela revisão adversarial de E-17, na forma de uma decisão registrada que o código não cumpriu. `WagerTransaction.fail()` **não tem chamador em `src/`** — só nos testes de unidade. Nenhuma transação chega ao status `FAILED`, e os dois códigos de infraestrutura de D-007 (`PERMANENT_INFRASTRUCTURE_ERROR`, `MAX_RETRIES_EXHAUSTED`) nunca são atribuídos a nada.
+
+A metade que já estava resolvida é **D-047**: o consumidor não escreve `FAILED`, porque a falha permanente faz rollback e não deixa linha onde marcar, e gravá-la numa segunda transação ocuparia a `idempotencyKey` da operação — o reenvio legítimo, depois de o defeito ser corrigido, passaria a responder replay de uma falha em vez de processar. Esse argumento continua de pé e não foi reaberto.
+
+A metade em aberto era a **previsão** que D-047 fez em seguida: *"D-013 continua íntegra e ganha emissor em E-13, onde uma transação em `PENDING_REFERENCE` que esgota o TTL existe e pode ser marcada."* E-13 não marcou `FAILED` — marcou `REJECTED` com `REFERENCE_NOT_FOUND`. As duas decisões apontavam para lados diferentes e nenhuma emendava a outra.
+
+**Opções:**
+- **Conformar ao enunciado**: o TTL segue `REJECTED`; `FAILED` fica sem emissor nesta entrega.
+- **Cumprir a letra de D-047**: E-13 passa a marcar `FAILED` no esgotamento do TTL.
+- **Adiar**: registrar a tensão e decidir depois da entrega.
+
+**Decisão:** **conformar ao enunciado.** O esgotamento do TTL continua produzindo `REJECTED` com `REFERENCE_NOT_FOUND`, como o código já faz. **`FAILED` fica sem emissor**, e os dois códigos de infraestrutura permanecem no enum como **reservados**. Nenhuma linha de `src/` mudou por conta desta decisão.
+
+**Justificativa:** a `§7.1` de `docs/desafio-original.md` escreve o desfecho como critério de aceite — esgotado o limite, `REJECTED` com um `failureCode` que identifique a referência inexistente, e evento correspondente publicado. `AGENTS.md` §1 dá ao enunciado supremacia sobre qualquer outro documento do repositório, e isso inclui a previsão de uma decisão nossa. D-007 já concordava por outro caminho, ao classificar `REFERENCE_NOT_FOUND` entre os 11 códigos de negócio: a referência que não chega em 15 minutos é desfecho da cadeia do provedor, não falha de infraestrutura nossa.
+
+O custo da alternativa fechou o argumento. Marcar `FAILED` no TTL exigiria, em cascata: um código que coubesse — nenhum dos dois de infraestrutura descreve o fato, então seria alargar `fail()` ou abrir um 14º; um **evento novo**, porque `WagerTransactionRejected.from()` recebe `BusinessFailureCode` e não existe evento de `FAILED`, sob pena de o TTL virar o único desfecho terminal silencioso do sistema; a reescrita de **RT-20**, que é teste obrigatório da §13; e o replay da mesma `Idempotency-Key` após o TTL passando de `422` a **`500`** por `httpStatusForResult`, colapsando duas situações que a §9 manda distinguir. Quatro desvios para cumprir a letra de uma previsão que a fonte da verdade contradiz.
+
+**Consequências:**
+- **Emenda a previsão de D-047.** A decisão de D-047 — o consumidor não escreve `FAILED` — segue íntegra; o que cai é a expectativa de que E-13 seria o emissor. Registrado aqui em vez de reescrito lá, pela mesma disciplina de D-042 sobre D-008 e de D-036 sobre D-006.
+- **D-007 fica intacto, fechado em 13.** Dois dos códigos ficam reservados. `InfrastructureFailureCode` continua existindo sem uso, exatamente como D-047 já registrava como deliberado, e o compilador segue impedindo que um código de infraestrutura entre em `reject()`.
+- **`docs/requirements.md` §RF-03 foi corrigido:** a afirmação "quem escreve `FAILED` é E-13" era falsa e passou a creditar `[DECIDIDO: D-047, D-064]`.
+- O ramo `Failed` de `httpStatusForResult` **permanece** — não por ser alcançável, mas porque o `switch` é exaustivo sobre `WagerTransactionStatus`, e `FAILED` continua no grafo de D-013, no `CHECK` do schema e na análise de D-050 (referência terminal → `REFERENCE_MISMATCH`).
+- **Limitação registrada em dois lugares**, não um: `ARCHITECTURE.md` §6, como as consequências de D-047 já mandavam, e a seção de Mensageria do `README.md`, que é onde quem integra lê o contrato das três filas. Uma mensagem que vai à DLQ não deixa rastro consultável por RF-12.
+- Um emissor real de `FAILED` — um consumidor da DLQ, por exemplo — é trabalho de outra etapa, com contrato próprio. Não cabe em congelamento.

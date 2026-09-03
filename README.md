@@ -277,7 +277,11 @@ Os cinco desfechos de `POST /wagering/transactions` são códigos **distintos** 
 | `wager-transactions-dlq.fifo` | erro permanente, por envio explícito **ou** por redrive policy |
 | `wagering-events.fifo` | saída — eventos de integração publicados pela outbox |
 
-Todas FIFO, todas provisionadas pelo próprio serviço de forma idempotente (D-041), em dois momentos: as duas de entrada no boot do consumidor — a DLQ primeiro, porque a redrive policy da origem carrega o ARN dela —, e a de saída na primeira publicação da outbox. Envelope aceito na fila de entrada:
+Todas FIFO, todas provisionadas pelo próprio serviço de forma idempotente (D-041), em dois momentos: as duas de entrada no boot do consumidor — a DLQ primeiro, porque a redrive policy da origem carrega o ARN dela —, e a de saída na primeira publicação da outbox.
+
+> **Limitação que quem integra precisa saber: a mensagem que vai à DLQ não deixa rastro no banco.** A falha permanente faz rollback da transação inteira, então não sobra linha para marcar — `GET /providers/:providerId/wagering/transactions/:externalTransactionId` responde `404` para uma operação que você efetivamente enviou. **A DLQ e o log são o registro dela.** É deliberado (D-047, D-064): gravar a falha numa transação à parte ocuparia a `Idempotency-Key` da operação, e o seu reenvio — depois de o defeito ser corrigido — responderia replay de uma falha em vez de processar, transformando um incidente recuperável em perda definitiva.
+
+Envelope aceito na fila de entrada:
 
 ```json
 {
@@ -359,5 +363,5 @@ Ele precisa de Docker rodando para os Testcontainers. Confirme com `docker ps`.
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | decisões, trade-offs, limitações conhecidas e o desenho de auth não implementada |
 | [docs/desafio-original.md](docs/desafio-original.md) | enunciado íntegro — fonte da verdade final |
 | [docs/requirements.md](docs/requirements.md) | requisitos numerados, restrições invioláveis, falhas eliminatórias e testes obrigatórios |
-| [docs/decisions.md](docs/decisions.md) | as 63 decisões registradas, com contexto e alternativas descartadas |
+| [docs/decisions.md](docs/decisions.md) | as 64 decisões registradas, com contexto e alternativas descartadas |
 | [docs/implementation-plan.md](docs/implementation-plan.md) | roteiro de implementação e o que cada etapa deixou para a seguinte |
