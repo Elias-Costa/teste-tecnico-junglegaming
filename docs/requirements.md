@@ -101,13 +101,19 @@ Cria wallet para `playerId` + `initialBalance`.
 - **A duplicata é traduzida no repositório** — `[DECIDIDO: D-035]`. `uq_wallets_player_currency` continua sendo a garantia (RI-09); o repositório converte a exceção do ORM em `WalletAlreadyExistsError`, que D-006 mapeia para `409`. **Sem `failureCode`**: os 13 códigos de D-007 estão fechados e nenhum descreve "wallet já existe".
 
 **RF-09 — `GET /wallets/:walletId`** — retorna estado atual da wallet.
+*Aceite:* corpo `{ id, playerId, balance, version }` — **a mesma forma da resposta de RF-08**, uma forma por recurso nos dois verbos. `[DECIDIDO: D-059]`. Wallet inexistente é `404` **sem `failureCode`**, e id malformado na rota é `400` — `[DECIDIDO: D-056]`.
 
 **RF-10 — `GET /wallets/:walletId/ledger?cursor=...&limit=50`**
 *Aceite:* paginação por **cursor estável e opaco** (não offset, não id exposto em claro). O critério de ordenação deve ser total e determinístico. `[DECIDIDO: D-014]` — keyset de coluna única sobre o id em UUIDv7, cursor = base64url do id. UUIDv7 passa a ser o padrão de id em todas as tabelas.
+- Corpo `{ entries, nextCursor }`, com `nextCursor: null` na última página — `[DECIDIDO: D-059]`. Cada lançamento traz `{ id, transactionId, direction, money, balanceBefore, balanceAfter, createdAt }`, com **todo dinheiro como objeto** `{ amount, currency }` (EL-01).
+- `limit` ausente vale `50`; acima de `200` é **`400`, não redução silenciosa** — `[DECIDIDO: D-058]`. A conversão de texto para inteiro mora em `src/infrastructure/config/`, o único lugar onde a guarda de lint de EL-01 a permite.
+- Cursor corrompido é `400` (forma inválida), não `404`. Ledger de wallet inexistente é `404`, não página vazia: página vazia seria indistinguível de uma wallet real sem lançamentos.
 
 **RF-11 — `GET /wagering/transactions/:transactionId`** — consulta por id interno.
+*Aceite:* corpo com identidade e payload, desfecho (`status`, `failureCode`, `observedBalance`, `processedAt`, referência resolvida) e auditoria (`idempotencyKey`, `correlationId`). **Sem `payloadHash`** — mecanismo interno de D-005. `[DECIDIDO: D-059]`. Uma transação em `REJECTED` responde `200` com o `failureCode` no corpo: a consulta não decide nada de negócio, então não repete o `422` da submissão.
 
 **RF-12 — `GET /providers/:providerId/wagering/transactions/:externalTransactionId`** — consulta por identidade do provedor.
+*Aceite:* mesma forma de RF-11 (D-059) — é o mesmo recurso por outra chave. Par inexistente é `404`, **inclusive quando o `externalTransactionId` existe sob outro provedor**: o par é a identidade e não há autorização a violar (D-012). `providerId = "internal"` é rota válida e devolve a `OPENING` da abertura (D-033).
 
 **RF-13 — `POST /wagering/transactions`**
 Submete uma operação de aposta.
@@ -130,6 +136,7 @@ Submete uma operação de aposta.
 **RF-15 — Mapeamento de status HTTP**
 *Aceite:* a API distingue com clareza — e **de forma consistente entre todos os endpoints** — cinco situações: (a) payload inválido, (b) conflito de idempotência, (c) rejeição por regra de negócio, (d) aceite com processamento pendente, (e) falha transitória de infraestrutura. Colapsar duas delas no mesmo código é falha de requisito. `[DECIDIDO: D-006]` — `400` / `409` / `422` / `202` / `503`, aplicados por um filtro de exceção único.
 - **O desfecho de negócio chega à borda como resultado, não como exceção** — `[DECIDIDO: D-036]`, emenda a D-006. Uma função pura decide `200`/`202`/`422` a partir do resultado; o filtro decide o resto. Os dois pontos vivem no mesmo arquivo e nenhum controller decide status por conta própria. O `422` tem duas formas de corpo, ambas com `failureCode`: rejeição persistida responde o corpo de RF-13 (com `transactionId`); rejeição que não vira linha (D-031, RN-13) responde `{ failureCode, message }`.
+- **As cinco situações são da submissão; as consultas acrescentam uma sexta resposta** — `404` para recurso inexistente, `[DECIDIDO: D-056]`. Ela não colapsa nenhuma das cinco: responde a uma pergunta que a §9 não faz, porque a §9 trata de operação submetida. Sai **sem `failureCode`**, e `WalletNotFoundError` continua sendo `422` com código no caminho de submissão (D-031) — mesma ausência, verbos diferentes.
 - **`503` é reconhecido por lista explícita de SQLSTATE; o que não é nenhuma das cinco situações é `500`** — `[DECIDIDO: D-037]`. Classe `08`, `40001`/`40P01`, classe `53`, `55P03`, `57014`, `57P01` e erros de rede sem SQLSTATE. Violação de constraint e erro de sintaxe **não** entram: reenviar não conserta bug. A mesma função classifica o consumo em RF-21 (E-11).
 
 **RF-16 — `POST /wallets/:walletId/reconciliation`**
@@ -137,6 +144,11 @@ Submete uma operação de aposta.
 - Resposta: `walletId`, `storedBalance`, `calculatedBalance`, `difference`, `consistent`, `checkedEntries`.
 - `calculatedBalance` é reconstruído a partir do ledger, não lido do saldo materializado.
 - Divergências **não são corrigidas silenciosamente**: são logadas, contabilizadas em métrica e sinalizadas na resposta.
+- **A leitura acontece sob o lock da wallet** — `[DECIDIDO: D-057]`. Em READ COMMITTED, ler o saldo e depois o ledger sem lock veria dois instantes distintos, e uma aposta confirmada entre as duas leituras produziria divergência falsa num sinal que este requisito manda logar e contabilizar. É o mesmo `findByIdForUpdate` de D-002, então continua havendo **um** ponto de aquisição de lock (RI-06).
+- `difference` é `storedBalance − calculatedBalance`, e a direção é contrato (D-057). Divergência responde `200` com `consistent: false` — devolver erro confundiria "o sistema está inconsistente" com "a verificação falhou".
+- O ledger é somado em páginas pelo keyset de D-014: o endpoint não depende do tamanho do ledger para caber na memória.
+- **A métrica ainda não existe: `D-060` está EM ABERTO** e endereçada a E-15, porque a tabela fechada de D-010 não nomeia nenhuma métrica de reconciliação. E-14 entrega a sinalização na resposta e um gancho `onDivergence` injetado, na mesma forma do `onCycleError` de E-10.
+- Wallet inexistente é `404` (D-056); id malformado na rota é `400`.
 
 **RF-17 — Health checks**
 *Aceite:* `GET /health/live` (processo vivo) e `GET /health/ready` (PostgreSQL **e** SQS alcançáveis), separados e **sem autenticação**.

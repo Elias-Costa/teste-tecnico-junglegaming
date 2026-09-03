@@ -1,3 +1,4 @@
+import { isUuid } from "../../../domain/identifier.ts";
 import type { MoneyProps } from "../../../domain/money.ts";
 import { InvalidPayloadError } from "../errors/invalid-payload-error.ts";
 
@@ -145,6 +146,27 @@ export function requiredHeader(
 
   if (typeof value !== "string" || value.trim() === "") {
     throw new InvalidPayloadError(`header ${name} é obrigatório.`);
+  }
+
+  return value;
+}
+
+/**
+ * Valida um id interno vindo da rota (D-056, D-014).
+ *
+ * Existe porque `walletId` e `transactionId` viram comparação com coluna `uuid`:
+ * uma rota como `/wallets/nao-e-uuid` produziria `22P02` no PostgreSQL, que não
+ * está na lista de D-037 e portanto viraria `500` — um erro de servidor para o
+ * que é payload malformado. Aqui isso é `400`, a situação (a) de RF-15.
+ *
+ * `400` e não `404`: a diferença é entre "não existe" e "isso nem é um id".
+ *
+ * @param what nome do parâmetro na mensagem, como o cliente o vê na rota.
+ * @throws InvalidPayloadError se o valor não tiver forma de UUID.
+ */
+export function uuidParam(value: string, what: string): string {
+  if (!isUuid(value)) {
+    throw new InvalidPayloadError(`${what} precisa ser um UUID.`);
   }
 
   return value;

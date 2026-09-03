@@ -16,6 +16,8 @@
 import { describe, expect, it } from "bun:test";
 import { HttpException, HttpStatus, NotFoundException } from "@nestjs/common";
 import { IdempotencyConflictError } from "../../src/application/errors/idempotency-conflict-error.ts";
+import { InvalidCursorError } from "../../src/application/errors/invalid-cursor-error.ts";
+import { ResourceNotFoundError } from "../../src/application/errors/resource-not-found-error.ts";
 import { WalletAlreadyExistsError } from "../../src/application/errors/wallet-already-exists-error.ts";
 import { WalletNotFoundError } from "../../src/application/errors/wallet-not-found-error.ts";
 import { InvalidLedgerEntryError } from "../../src/domain/errors/invalid-ledger-entry-error.ts";
@@ -196,5 +198,53 @@ describe("isTransientDatabaseError: a lista explícita de D-037", () => {
     expect(isTransientDatabaseError(new Error("sem código"))).toBe(false);
     expect(isTransientDatabaseError(undefined)).toBe(false);
     expect(isTransientDatabaseError("string solta")).toBe(false);
+  });
+});
+
+describe("E-14 — a sexta resposta: `404` de leitura (D-056)", () => {
+  const naoEncontrado = httpProblemFor(
+    new ResourceNotFoundError("wallet", "0192f291-27dd-7d3f-8071-5f8685deef37"),
+  );
+
+  it("consulta de recurso inexistente é 404", () => {
+    expect(naoEncontrado.status).toBe(HttpStatus.NOT_FOUND);
+  });
+
+  it("**não** carrega failureCode: nenhuma regra de negócio foi avaliada", () => {
+    // `422` sempre traz um código de D-007 porque houve decisão de negócio.
+    // Num `GET` não houve — houve ausência de linha.
+    expect(naoEncontrado.failureCode).toBeUndefined();
+  });
+
+  it("não colapsa nenhuma das cinco situações de RF-15", () => {
+    const cinco = [
+      httpProblemFor(new InvalidPayloadError("walletId precisa ser um UUID.")).status,
+      httpProblemFor(new IdempotencyConflictError("provider-a:tx-1", "tx-interna")).status,
+      httpStatusForResult(WagerTransactionStatus.Rejected),
+      httpStatusForResult(WagerTransactionStatus.PendingReference),
+      httpProblemFor(erroComCodigo("08006")).status,
+    ];
+
+    expect(cinco).not.toContain(HttpStatus.NOT_FOUND);
+    expect(new Set([...cinco, naoEncontrado.status]).size).toBe(6);
+  });
+
+  it("`WalletNotFoundError` continua sendo `422` com código: mesma ausência, outro verbo", () => {
+    // D-031 é a rejeição de negócio da **submissão**; D-056 é a consulta. Os
+    // dois tipos coexistem de propósito, e é este par de asserções que impede
+    // alguém de "simplificar" fundindo-os.
+    const submissao = httpProblemFor(
+      new WalletNotFoundError("0192f291-27dd-7d3f-8071-5f8685deef37"),
+    );
+
+    expect(submissao.status).toBe(HttpStatus.UNPROCESSABLE_ENTITY);
+    expect(submissao.failureCode).toBe(BusinessFailureCode.WalletNotFound);
+  });
+
+  it("cursor corrompido é 400, não 404: forma inválida, não recurso ausente", () => {
+    const problema = httpProblemFor(new InvalidCursorError("cursor inválido."));
+
+    expect(problema.status).toBe(HttpStatus.BAD_REQUEST);
+    expect(problema.failureCode).toBeUndefined();
   });
 });

@@ -1,6 +1,8 @@
 import { HttpException, HttpStatus } from "@nestjs/common";
 import { IdempotencyConflictError } from "../../application/errors/idempotency-conflict-error.ts";
+import { InvalidCursorError } from "../../application/errors/invalid-cursor-error.ts";
 import { KindNotSubmittableError } from "../../application/errors/kind-not-submittable-error.ts";
+import { ResourceNotFoundError } from "../../application/errors/resource-not-found-error.ts";
 import { WalletAlreadyExistsError } from "../../application/errors/wallet-already-exists-error.ts";
 import { WalletNotFoundError } from "../../application/errors/wallet-not-found-error.ts";
 import { InvalidLedgerEntryError } from "../../domain/errors/invalid-ledger-entry-error.ts";
@@ -29,6 +31,12 @@ import { InvalidPayloadError } from "./errors/invalid-payload-error.ts";
  *   como transação terminal auditável, e usar o mecanismo de erro da linguagem
  *   para um desfecho esperado e frequente sairia caro em quem reusa a borda.
  * - `httpProblemFor` — as exceções, consumido pelo filtro único.
+ *
+ * **As cinco situações são da submissão; as consultas de E-14 acrescentam uma
+ * sexta resposta** — `404` para recurso inexistente (D-056). Ela não colapsa
+ * nenhuma das cinco, porque responde a uma pergunta que a §9 não faz: a §9 trata
+ * de operação submetida, e um `GET` não submete nada. Por isso o `404` sai sem
+ * `failureCode` — não houve decisão de negócio, houve ausência de linha.
  */
 
 /** Um erro traduzido para a resposta HTTP: status, mensagem e código quando houver. */
@@ -105,9 +113,18 @@ export function httpProblemFor(error: unknown): HttpProblem {
     error instanceof InvalidMoneyError ||
     error instanceof MissingReferenceError ||
     error instanceof InvalidLedgerEntryError ||
-    error instanceof NegativeBalanceError
+    error instanceof NegativeBalanceError ||
+    error instanceof InvalidCursorError
   ) {
     return { status: HttpStatus.BAD_REQUEST, message: error.message };
+  }
+
+  // Consulta de recurso inexistente (D-056). **Sem `failureCode`**: nenhuma
+  // regra de negócio foi avaliada, então nenhum dos 13 códigos de D-007
+  // descreve o que aconteceu. Distinto de `WalletNotFoundError`, logo abaixo,
+  // que é a mesma ausência vista pelo caminho de submissão (D-031).
+  if (error instanceof ResourceNotFoundError) {
+    return { status: HttpStatus.NOT_FOUND, message: error.message };
   }
 
   // (b) Conflito. Os dois usos de `409` compartilham o eixo semântico "este

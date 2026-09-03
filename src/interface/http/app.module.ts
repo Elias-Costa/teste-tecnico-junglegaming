@@ -2,11 +2,15 @@ import { MikroOrmModule } from "@mikro-orm/nestjs";
 import { EntityManager } from "@mikro-orm/postgresql";
 import { Module } from "@nestjs/common";
 import { APP_FILTER, APP_GUARD } from "@nestjs/core";
+import { GetWagerTransaction } from "../../application/get-wager-transaction.ts";
+import { GetWallet } from "../../application/get-wallet.ts";
+import { ListWalletLedger } from "../../application/list-wallet-ledger.ts";
 import { OpenWallet } from "../../application/open-wallet.ts";
 import type { Clock } from "../../application/ports/clock.ts";
 import type { IdGenerator } from "../../application/ports/id-generator.ts";
 import type { UnitOfWork } from "../../application/ports/unit-of-work.ts";
 import { ProcessWagerTransaction } from "../../application/process-wager-transaction.ts";
+import { ReconcileWallet } from "../../application/reconcile-wallet.ts";
 import { DeclaredProviderIdentity } from "../../infrastructure/declared-provider-identity.ts";
 import {
   CLOCK,
@@ -20,6 +24,7 @@ import { SystemClock } from "../../infrastructure/system-clock.ts";
 import { UuidV7IdGenerator } from "../../infrastructure/uuid-v7-id-generator.ts";
 import { AuthGuard } from "./auth.guard.ts";
 import { HttpExceptionFilter } from "./http-exception.filter.ts";
+import { ProviderTransactionsController } from "./provider-transactions.controller.ts";
 import { WageringTransactionsController } from "./wagering-transactions.controller.ts";
 import { WalletsController } from "./wallets.controller.ts";
 
@@ -38,9 +43,11 @@ import { WalletsController } from "./wallets.controller.ts";
  * rastreamento que ninguém usa e que reexporia o ledger ao `P0001` da trigger de
  * D-023.
  *
- * **Não há `main.ts` nesta etapa.** Subir o processo, expor health (RF-17) e
- * oferecer o comando de migration são escopo de E-14/E-15; aqui o módulo é
- * exercitado pelos testes, que sobem a aplicação numa porta efêmera.
+ * **Continua não havendo `main.ts`.** E-14 acrescentou os quatro endpoints de
+ * leitura e a reconciliação, mas subir o processo, expor health (RF-17) e
+ * oferecer o comando de migration não estão no escopo de nenhuma das duas
+ * etapas listadas no roteiro; hoje o módulo é exercitado pelos testes, que
+ * sobem a aplicação numa porta efêmera.
  */
 @Module({
   imports: [
@@ -49,7 +56,11 @@ import { WalletsController } from "./wallets.controller.ts";
       registerRequestContext: false,
     }),
   ],
-  controllers: [WalletsController, WageringTransactionsController],
+  controllers: [
+    WalletsController,
+    WageringTransactionsController,
+    ProviderTransactionsController,
+  ],
   providers: [
     { provide: CLOCK, useClass: SystemClock },
     { provide: ID_GENERATOR, useClass: UuidV7IdGenerator },
@@ -70,6 +81,35 @@ import { WalletsController } from "./wallets.controller.ts";
       useFactory: (unitOfWork: UnitOfWork, clock: Clock, ids: IdGenerator): OpenWallet =>
         new OpenWallet(unitOfWork, clock, ids),
     },
+
+    // As quatro leituras de E-14 recebem **só** a `UnitOfWork`: consulta não
+    // gera id nem carimba instante, então injetar `Clock` ou `IdGenerator` nelas
+    // seria dependência que ninguém usa. `ReconcileWallet` aceita um observador
+    // de divergência e hoje não recebe nenhum — é o gancho onde E-15 liga o log
+    // de RNF-06 e a métrica de D-060.
+    {
+      provide: GetWallet,
+      inject: [UNIT_OF_WORK],
+      useFactory: (unitOfWork: UnitOfWork): GetWallet => new GetWallet(unitOfWork),
+    },
+    {
+      provide: GetWagerTransaction,
+      inject: [UNIT_OF_WORK],
+      useFactory: (unitOfWork: UnitOfWork): GetWagerTransaction =>
+        new GetWagerTransaction(unitOfWork),
+    },
+    {
+      provide: ListWalletLedger,
+      inject: [UNIT_OF_WORK],
+      useFactory: (unitOfWork: UnitOfWork): ListWalletLedger =>
+        new ListWalletLedger(unitOfWork),
+    },
+    {
+      provide: ReconcileWallet,
+      inject: [UNIT_OF_WORK],
+      useFactory: (unitOfWork: UnitOfWork): ReconcileWallet => new ReconcileWallet(unitOfWork),
+    },
+
     {
       provide: ProcessWagerTransaction,
       inject: [UNIT_OF_WORK, CLOCK, ID_GENERATOR],

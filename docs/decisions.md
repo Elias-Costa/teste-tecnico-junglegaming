@@ -24,17 +24,21 @@ Registro leve de decisões, estilo ADR. Neste projeto ele tem **três** funçõe
 
 ## Fila de decisões em aberto
 
-**Vazia.** O único item — o dono de `reference_attempts` e `next_reference_attempt_at`, aberto por **D-029** — foi fechado por **D-052** em 2026-09-02, antes de o worker de E-13 ser escrito. As duas colunas são estado operacional, manipulado por `UPDATE` direto no `PendingReferenceStore`.
+**Um item, aberto por E-14 e endereçado a E-15: `D-060` — o nome da métrica de divergência de reconciliação.** RF-16 exige que a divergência seja "contabilizada em métrica", e a tabela de **D-010** fecha a nomenclatura em sete métricas, **nenhuma das quais a cobre**. E-14 não instala `prom-client` (isso é escopo de E-15), então a etapa entrega a divergência sinalizada na resposta e um gancho `onDivergence` injetado — mesma forma do `onCycleError` de E-10, e pelo mesmo motivo: não deixar a falha sumir em silêncio enquanto o log estruturado de RNF-06 não existe. **E-15 não pode começar sem que o nome entre na tabela de D-010.**
+
+O item anterior — o dono de `reference_attempts` e `next_reference_attempt_at`, aberto por **D-029** — foi fechado por **D-052** em 2026-09-02, antes de o worker de E-13 ser escrito. As duas colunas são estado operacional, manipulado por `UPDATE` direto no `PendingReferenceStore`.
 
 A fila continuar vazia não significa que ela deixou de valer: toda etapa seguinte que expuser uma decisão não prevista **para** e a registra aqui antes de virar código (`AGENTS.md` §0).
 
-As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito, **D-033** a **D-039**, expostas por E-08 e resolvidas antes de a borda HTTP ser escrita, **D-040** a **D-043**, expostas por E-10 e resolvidas antes de o worker ser escrito, **D-044** a **D-048**, expostas por E-11 e resolvidas antes de o consumidor ser escrito, **D-049** a **D-051**, expostas por E-12 e resolvidas antes de os quatro kinds restantes serem escritos, e **D-052** a **D-055**, expostas por E-13 e resolvidas antes de o worker de referências ser escrito — entre elas **D-052**, que fecha o último item da fila. **Nenhuma etapa está bloqueada.**
+As 15 decisões que o enunciado delegava ao candidato foram fechadas em 2026-09-01, antes de existir código de produção. A elas se somam **D-016** e **D-017** — expostas por E-02 e resolvidas antes de o `Money` ser escrito —, **D-018** a **D-021**, expostas por E-03 e resolvidas antes de as entidades serem escritas, **D-022**, exposta por E-04 e resolvida antes de o `scheduleRetry` ser escrito, **D-023** a **D-025**, expostas por E-05 e resolvidas antes de a migration ser escrita, **D-026** a **D-029**, expostas por E-06 e resolvidas antes de o mapeamento ser escrito, **D-030** a **D-032**, expostas por E-07 e resolvidas antes de o use case ser escrito, **D-033** a **D-039**, expostas por E-08 e resolvidas antes de a borda HTTP ser escrita, **D-040** a **D-043**, expostas por E-10 e resolvidas antes de o worker ser escrito, **D-044** a **D-048**, expostas por E-11 e resolvidas antes de o consumidor ser escrito, **D-049** a **D-051**, expostas por E-12 e resolvidas antes de os quatro kinds restantes serem escritos, **D-052** a **D-055**, expostas por E-13 e resolvidas antes de o worker de referências ser escrito, e **D-056** a **D-059**, expostas por E-14 e resolvidas antes de as consultas serem escritas. **E-15 está bloqueada por D-060**; nenhuma outra etapa está.
 
 **E-09 foi a primeira etapa a não expor decisão nenhuma**, e vale registrar por quê: ela não escreveu código de produção. A prova de concorrência é só teste, e a estratégia que ela verifica — pessimistic `FOR UPDATE` por wallet — já estava decidida em **D-002** desde 2026-09-01. A forma de RT-17 (três processos de sistema operacional subindo o `AppModule` inteiro, em vez de três chamadas ao use case no mesmo processo) também não foi escolha: **RI-08** cobra literalmente "correta com múltiplas **instâncias da aplicação**", e EL-05 é "correta somente com uma instância". Uma etapa sem decisão nova é sinal de que as anteriores foram bem fechadas, não de que alguém deixou de perguntar.
 
 A fila continua valendo daqui em diante: se a implementação expuser uma decisão não prevista — como aconteceu com D-015 (escala de entrada) e com os códigos de infraestrutura de D-007, ambos descobertos ao detalhar outra decisão; como voltou a acontecer em E-02 com a validação de `currency` (D-016) e o comportamento de `equals` (D-017); como aconteceu em E-03, onde D-018 estava **delegada em texto pelo próprio enunciado** ("assinatura e retorno são decisão sua", §6.2) e D-020 e D-021 apareceram como conflitos entre dois requisitos que só se manifestam ao escrever a validação; como aconteceu em E-04, onde D-008 fixava os limites do backoff mas não a forma da curva (D-022); e como aconteceu em E-05, onde o próprio escopo da etapa registrava duas vias sem escolher entre elas (D-023) e onde **dois documentos já registrados divergiam** sobre a chave da inbox (D-025); e como aconteceu em E-06, onde a rejeição do Custom Type em D-004 já implicava a forma do mapeamento sem que ninguém a tivesse registrado (D-026); e como aconteceu em E-07, onde RN-12 pedia um saldo que **nenhuma coluna guardava** (D-030) e onde **D-007 e o schema de E-05 se contradiziam** sobre `WALLET_NOT_FOUND` (D-031); e como voltou a acontecer em E-08, a etapa que mais expôs decisões de uma vez — **sete** —, incluindo o caso em que **o schema de E-05 tornava impossível** a transação interna que RF-08 exige, por seis colunas NOT NULL sem valor natural na abertura (D-033), e o caso em que **a própria consequência de D-006 não cobria o caminho normal** que E-07 acabara de produzir (D-036); e como aconteceu de novo em E-10, onde o enunciado **nomeia as filas de entrada e nenhuma de saída** (D-040), onde o LocalStack sobe vazio e ninguém tinha o encargo de criar a fila (D-041), e onde **D-008 fixava um limite de tentativas sem dizer o que acontece depois dele** (D-042, que a emenda); e como aconteceu em E-11, onde um **JSDoc escrito em E-04 contradizia o payload do próprio enunciado** sobre qual `messageId` deduplica (D-044), onde **o roteiro descrevia um estado que este sistema não produz** — transação em `PENDING` depois de erro transitório (D-047) — e onde a classificação literal de RF-21 **apagaria três erros de negócio sem deixar rastro nenhum** (D-048); e como aconteceu em E-12, onde um **índice criado para RN-09 passaria a impor unicidade sobre um kind que a regra nem menciona** (D-049), onde RN-04/RN-05 exigem uma referência `PROCESSED` **sem dizer o que fazer com os outros status** (D-050) e onde a resposta carrega **um** `failureCode` para violações que podem ser simultâneas (D-051) — ela entra aqui e **para a etapa**, conforme `AGENTS.md` §0.
 
 E-13 fechou o ciclo com quatro de uma vez, e vale notar de onde vieram: **D-052** era o item que a própria fila já carregava; **D-053** era uma pendência que D-030 tinha nomeado e adiado; **D-054** apareceu porque o reuso de `decideReversal` esbarrou no grafo de D-013 — a pendente relida não pode ser re-marcada, e isso só se descobre ao escrever a segunda entrada; e **D-055** porque **RNF-06 exigia um `correlationId` que nenhuma coluna guardava**, exatamente como RN-12 exigira em E-07 um saldo que nenhuma coluna guardava (D-030). Fila vazia não significa que não vão surgir mais.
+
+E-14 confirmou isso com quatro decisões e uma pendência, e a origem delas vale registrar: **D-056** porque o mapa de D-006 fechava cinco situações e **nenhuma delas responde a um `GET`**; **D-057** porque comparar saldo com ledger em READ COMMITTED lê **dois instantes diferentes**, e a divergência falsa cairia num sinal que RF-16 manda logar; **D-058** porque a guarda de lint de EL-01 torna a conversão mais banal do projeto — texto para inteiro — uma pergunta de arquitetura; **D-059** porque o enunciado exibe o corpo de três endpoints e **não o das quatro consultas**. E **D-060** ficou aberta porque RF-16 exige uma métrica que a tabela fechada de D-010 não nomeia — o mesmo tipo de lacuna de D-030 e D-055, desta vez entre dois documentos já registrados.
 
 ---
 
@@ -1302,3 +1306,112 @@ O custo é uma migration e uma coluna que hoje só o worker relê. É baixo, e a
 - Fora do `Pick<WagerTransactionUpdate>`: é imutável do nascimento ao terminal.
 - O `causationId` dos eventos publicados pelo worker é o **id da transação resolvida** — o elo que substitui a requisição ausente.
 - `OpenWallet` também a grava na `OPENING`: um caminho de escrita só se defende melhor do que uma exceção para o produtor interno.
+
+---
+
+## D-056 — Consulta de recurso inexistente: `404`, fora das cinco situações (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-14. D-006 fecha o mapa de RF-15 em cinco situações — payload inválido, conflito, rejeição de negócio, aceite pendente e falha transitória — e **nenhuma delas é "não encontrado"**. Até E-13 isso não incomodava, porque só existiam endpoints de escrita: uma submissão contra wallet inexistente é rejeição de negócio, com `WALLET_NOT_FOUND` e `422` por D-031. As quatro consultas de RF-09..RF-12 e a reconciliação de RF-16 fazem a pergunta pela primeira vez.
+
+**Opções:**
+- **`404` sem `failureCode`** — acrescenta um sexto código ao mapa, declaradamente do eixo de leitura.
+- **`422` + `WALLET_NOT_FOUND`**, reusando D-031 — mantém o mapa em cinco códigos.
+- **`404` para wallet e `422` para transação** — distinguir por recurso.
+
+**Decisão:** **`404`, com corpo `{ message }` e sem `failureCode`**, para wallet ou transação inexistente em qualquer endpoint de consulta, inclusive na reconciliação de RF-16.
+
+**Justificativa:** `422` significa "entendi a requisição e recusei processá-la por regra de negócio"; um `GET` não processa nada, e responder com um `failureCode` da taxonomia de D-007 diria ao provedor que houve decisão de negócio onde houve apenas ausência de linha. O sexto código **não colapsa** nenhuma das cinco situações da §9 — ele cobre uma pergunta que a §9 não faz, porque ela trata da submissão. A terceira opção foi descartada de imediato: duas regras para a mesma pergunta é exatamente a inconsistência entre endpoints que o enunciado cobra.
+
+**Consequências:**
+- Tipo de erro **novo e separado**: `ResourceNotFoundError` em `src/application/errors/`. `WalletNotFoundError` **não muda** — ela é a rejeição de negócio de D-031, no caminho de submissão, e continua `422`. Os dois coexistem de propósito: mesma ausência, significados diferentes conforme o verbo.
+- `httpProblemFor` ganha um ramo, e o cabeçalho de `http-status-map.ts` passa a dizer "cinco situações de submissão + `404` de leitura". O teste unitário do mapa cobre o sexto código.
+- Id malformado na rota (`/wallets/nao-e-uuid`) é **`400`, não `404`**: é forma inválida, situação (a) de RF-15, barrada no parser da borda antes de virar consulta. Sem isso, a string chegaria à coluna `uuid` e o `22P02` do PostgreSQL — que não está na lista de D-037 — viraria `500`.
+- `GET /providers/:providerId/...` com `externalTransactionId` de outro provedor é `404`, não `403`: o par `(providerId, externalTransactionId)` é a identidade, e não existe autorização a violar (D-012).
+
+---
+
+## D-057 — Reconciliação lê sob o lock da wallet (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-14. RF-16 compara `storedBalance` (coluna da wallet) com `calculatedBalance` (soma do ledger). Em READ COMMITTED — o isolamento de todo o projeto — dois `SELECT` da mesma transação veem **snapshots diferentes**: uma aposta que confirme entre as duas leituras faz a reconciliação acusar divergência que não existe. E RF-16 manda logar e contabilizar divergência em métrica, ou seja, o alarme falso não é inofensivo.
+
+**Opções:**
+- **`SELECT ... FOR UPDATE` na wallet**, reusando D-002.
+- **Transação em `REPEATABLE READ`** — snapshot consistente sem bloquear ninguém.
+- **Leitura simples**, aceitando divergência falsa sob concorrência.
+
+**Decisão:** a reconciliação entra por **`findByIdForUpdate`**, o mesmo ponto único de aquisição de lock de D-002 e RI-06, e lê o ledger dentro da mesma transação.
+
+**Justificativa:** um mecanismo de serialização só no sistema inteiro. `REPEATABLE READ` resolveria o mesmo problema sem bloquear, mas introduziria um segundo nível de isolamento — mais um comportamento para explicar, testar e lembrar na próxima etapa que tocar transação. A resposta em uma frase é "a reconciliação espera a movimentação em voo terminar, em vez de correr contra ela", e ela vale tanto para quem lê o código quanto para quem opera o sistema.
+
+**Consequências:**
+- `POST /wallets/:id/reconciliation` **bloqueia apostas daquela wallet** enquanto lê o ledger. É o custo aceito, e ele é proporcional ao tamanho do ledger — por isso a leitura é paginada e não carrega tudo em memória.
+- **Não é um segundo lugar que trava `wallets`**: é o mesmo `findByIdForUpdate`, que RI-06 exige ser o único. Uma revisão que procure `FOR UPDATE` disperso continua encontrando um ponto só.
+- A ordem de locks não muda: a reconciliação trava **apenas** a wallet, então não pode entrar no deadlock que E-13 evitou ao fixar wallet-antes-de-transação.
+- A soma do ledger é dobrada em páginas pelo mesmo keyset de D-014, com tamanho de página fixo no código. O endpoint não depende do tamanho do ledger para caber na memória.
+- `difference` é `storedBalance − calculatedBalance` — "quanto o saldo materializado tem a mais do que o ledger justifica". A direção é contrato: invertê-la troca o sinal que o operador lê no incidente.
+
+---
+
+## D-058 — `limit` de RF-10: a conversão mora em `infrastructure/config` (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-14. RF-10 recebe `limit` como texto de query string e o ORM precisa de um inteiro. A guarda de EL-01 (E-01) bane `Number()` e `parseInt` em **todo** `src/`, com exceção estreita apenas em `src/infrastructure/config/` — e E-11 já registrou, ao converter `ApproximateReceiveCount`, que **ampliar a exceção não é a saída**.
+
+**Opções:**
+- **Helper em `src/infrastructure/config/`**, seguindo o precedente de `consumerBackoffSeconds`.
+- **Ampliar a exceção do lint** ao parser de DTO.
+- **Conjunto fechado de tamanhos de página**, sem conversão nenhuma.
+
+**Decisão:** `parseLedgerPageSize` em **`src/infrastructure/config/page-size.ts`**, com `DEFAULT_LEDGER_PAGE_SIZE = 50` e `MAX_LEDGER_PAGE_SIZE = 200`.
+
+**Justificativa:** o diretório já é, de fato, o dono dos **inteiros que entram no sistema como texto** — porta do banco, tamanho de lote, limites de retry (D-008), contagem de recebimento do SQS (E-11). Tamanho de página é o mesmo tipo de valor, e acomodá-lo ali não mexe em nenhuma regra de lint. A exceção continua sendo por diretório, que é justamente o que impede que ela cresça por descuido.
+
+**Consequências:**
+- A função devolve `number | undefined`, e **não lança**: quem transforma "malformado" em `InvalidPayloadError` é a borda, que é a dona dos erros de forma (D-038). Assim `src/infrastructure` não importa de `src/interface`.
+- `limit` ausente vale `50` — o valor que a própria URL de RF-10 exibe. Acima de `200`, **`400`**, não silenciosamente reduzido: um limite reduzido em silêncio faria o cliente paginar achando que recebeu tudo.
+- Aceita apenas `[1-9][0-9]{0,3}`: zero, negativo, `1e3` e espaço são forma inválida antes de qualquer conversão.
+- **Os dois números são arbitrários e ficam registrados aqui para poderem ser mudados por decisão**, não por descoberta no código — mesmo tratamento que D-008 deu aos limites de retry.
+
+---
+
+## D-059 — Forma da resposta das consultas (2026-09-02)
+
+**Status:** DECIDIDA
+**Contexto:** lacuna exposta por E-14. O enunciado lista as quatro rotas de consulta (§9) e **não mostra o corpo de nenhuma delas** — ao contrário da abertura, da submissão e da reconciliação, que vêm com exemplo completo. A forma é contrato de integração e precisa ser decidida, não improvisada endpoint a endpoint.
+
+**Opções:**
+- **Negócio + desfecho**, sem campos de idempotência nem correlação.
+- **Negócio + desfecho + auditoria** (`idempotencyKey`, `correlationId`), sem `payloadHash`.
+- **Representação completa**, incluindo `payloadHash`.
+
+**Decisão:**
+- **Wallet (RF-09):** `{ id, playerId, balance, version }` — **a mesma forma da resposta de RF-08**. Uma forma por recurso, nos dois verbos.
+- **Transação (RF-11, RF-12):** identidade e payload (`id`, `providerId`, `externalTransactionId`, `walletId`, `playerId`, `roundId`, `gameId`, `kind`, `money`, `referenceExternalTransactionId`), desfecho (`status`, `referenceTransactionId`, `observedBalance`, `failureCode`, `processedAt`), auditoria (`idempotencyKey`, `correlationId`) e `createdAt`. **Sem `payloadHash`.**
+- **Página do ledger (RF-10):** `{ entries: [...], nextCursor }`, cada lançamento com `{ id, transactionId, direction, money, balanceBefore, balanceAfter, createdAt }`. `nextCursor` é `null` na última página.
+
+**Justificativa:** `idempotencyKey` e `correlationId` são o que fecha um atendimento sem acesso ao banco: o provedor pergunta "o que aconteceu com a minha `provider-a:transaction-123`?" e a resposta já traz a chave que ele mandou e o rastro que liga aos logs. `payloadHash` fica de fora porque é mecanismo interno de D-005 — expô-lo convidaria o provedor a recalculá-lo por conta própria e a depender de uma lista de campos que a própria D-005 declara ser contrato **nosso**, alterável.
+
+**Consequências:**
+- Campos ausentes são **omitidos**, não `null` — mesma convenção do filtro de exceção de E-08: o cliente testa presença, e `null` o obrigaria a distinguir dois "sem valor".
+- Instantes saem como **ISO 8601 explícito** (`toISOString()`), não delegados à serialização de `Date` do framework: a forma do contrato não deve depender de qual serializador está montado.
+- Dinheiro sai como `MoneyProps` (`{ amount, currency }`) em toda parte, inclusive `balanceBefore`/`balanceAfter` do ledger — nunca número (EL-01).
+- As três views vivem na camada de aplicação, junto dos use cases que as produzem, como `OpenWalletResult` e `ProcessWagerTransactionResult`. A borda HTTP não remonta corpo.
+- `GET /providers/internal/wagering/transactions/{walletId}` devolve a `OPENING` de D-033. É auditoria legítima da transação interna, como o "Estado atual" de E-08 já antecipava.
+
+---
+
+## D-060 — Nome da métrica de divergência de reconciliação (2026-09-02)
+
+**Status:** EM ABERTO — endereçada a E-15, exposta por E-14.
+**Contexto:** RF-16 exige que uma divergência entre `storedBalance` e `calculatedBalance` seja **logada, contabilizada em métrica e sinalizada na resposta**. A tabela de D-010 fecha a nomenclatura de observabilidade em sete métricas — `wager_transactions_total`, `wager_duplicates_total`, `wager_retries_total`, `wager_dlq_messages_total`, `wallet_lock_wait_seconds`, `outbox_lag_seconds`, `wager_processing_seconds` — e **nenhuma delas cobre reconciliação**. A lacuna só aparece ao implementar RF-16, porque até E-13 não havia quem divergisse.
+
+**Opções:**
+- **`wallet_reconciliation_divergences_total`** (counter, sem label) — conta ocorrências.
+- **`wallet_reconciliation_checks_total{consistent}`** (counter com label) — conta todas as verificações e separa por desfecho, o que dá a taxa e não só o numerador.
+- **As duas**, uma contando verificações e outra sendo um gauge do maior desvio observado.
+
+**Por que não foi decidida em E-14:** a etapa **não instala `prom-client`** — D-010 põe o registro de métricas em E-15, e antecipá-lo faria E-14 montar metade da infraestrutura de observabilidade fora da etapa dela. O que E-14 entrega é a divergência **sinalizada na resposta** (`consistent: false`, `difference`) e um gancho `onDivergence` injetado no use case, com a mesma forma e o mesmo propósito do `onCycleError` de E-10: enquanto o log estruturado de RNF-06 não existe, a falha não pode sumir calada.
+
+**Bloqueia:** E-15. O nome precisa entrar na tabela de D-010 antes de virar código, porque aquela tabela é declarada contrato de observabilidade.

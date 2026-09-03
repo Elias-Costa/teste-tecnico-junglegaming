@@ -1,4 +1,8 @@
-import { Body, Controller, Headers, Inject, Post, Res } from "@nestjs/common";
+import { Body, Controller, Get, Headers, Inject, Param, Post, Res } from "@nestjs/common";
+import {
+  GetWagerTransaction,
+  type WagerTransactionView,
+} from "../../application/get-wager-transaction.ts";
 import type { IdGenerator } from "../../application/ports/id-generator.ts";
 import type { ProviderIdentityPort } from "../../application/ports/provider-identity.ts";
 import {
@@ -8,6 +12,7 @@ import {
 import { ID_GENERATOR, PROVIDER_IDENTITY } from "../../infrastructure/di-tokens.ts";
 import { CORRELATION_HEADER, resolveCorrelationId } from "./correlation.ts";
 import { parseSubmitTransactionRequest } from "./dto/parse-submit-transaction-request.ts";
+import { uuidParam } from "./dto/parse.ts";
 import { httpStatusForResult } from "./http-status-map.ts";
 import type { HttpResponse } from "./http-response.ts";
 
@@ -31,6 +36,7 @@ const AUTHORIZATION_HEADER = "authorization";
 export class WageringTransactionsController {
   constructor(
     private readonly process: ProcessWagerTransaction,
+    private readonly getTransaction: GetWagerTransaction,
     @Inject(PROVIDER_IDENTITY) private readonly identity: ProviderIdentityPort,
     @Inject(ID_GENERATOR) private readonly ids: IdGenerator,
   ) {}
@@ -69,6 +75,25 @@ export class WageringTransactionsController {
     response.status(httpStatusForResult(result.status));
 
     return result;
+  }
+
+  /**
+   * `GET /wagering/transactions/:transactionId` — consulta por id interno (RF-11).
+   *
+   * Sempre `200` ou `404` (D-056): a consulta não decide nada de negócio, então
+   * uma transação em `REJECTED` é devolvida com `200` e o seu `failureCode` no
+   * corpo. Responder `422` aqui repetiria o desfecho da submissão como se a
+   * consulta o estivesse produzindo de novo.
+   */
+  @Get(":transactionId")
+  async get(
+    @Param("transactionId") transactionId: string,
+    @Headers(CORRELATION_HEADER) correlationHeader: unknown,
+    @Res({ passthrough: true }) response: HttpResponse,
+  ): Promise<WagerTransactionView> {
+    response.setHeader(CORRELATION_HEADER, resolveCorrelationId(correlationHeader, this.ids));
+
+    return this.getTransaction.byId(uuidParam(transactionId, "transactionId"));
   }
 }
 
